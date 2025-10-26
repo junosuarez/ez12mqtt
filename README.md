@@ -178,8 +178,8 @@ If you are not using Home Assistant, you can still subscribe to the MQTT topics 
 ├── <device_topic>/
 │   ├── info
 │   ├── status
-│   └── maxPower_W
-│       └── set
+│   ├── maxPower_W/
+│   │   └── set
 └── _status
 ```
 
