@@ -190,6 +190,8 @@ When Home Assistant integration is enabled, a separate availability topic is pub
 
 This allows Home Assistant to accurately track the online/offline status of each device.
 
+**Note on `number` entities:** The Home Assistant MQTT discovery schema for `number` entities uses `min` and `max` to define the range, which differs from the `native_min_value` and `native_max_value` properties found in the core entity documentation. This implementation uses `min` and `max` to ensure compatibility.
+
 ## Data Transformation Details
 
 ### `info` Topic Payload

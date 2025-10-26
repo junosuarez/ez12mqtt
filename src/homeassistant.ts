@@ -74,8 +74,11 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       payload.unit_of_measurement = component.unit;
       payload.device_class = component.device_class;
       payload.mode = component.mode;
-      payload.native_min_value = deviceState.minPower;
-      payload.native_max_value = deviceState.maxPower;
+      // Note: Home Assistant's MQTT discovery for numbers uses `min` and `max`,
+      // which differs from the `native_min_value` and `native_max_value` properties
+      // used in the core entity model.
+      payload.min = parseFloat(deviceState.minPower as any);
+      payload.max = parseFloat(deviceState.maxPower as any);
     }
 
     mqttClient.publish(discoveryTopic, payload, true);
