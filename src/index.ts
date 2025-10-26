@@ -71,8 +71,8 @@ async function fetchAndPublishMaxPower(deviceState: DeviceState): Promise<void> 
       observedAt: Math.floor(Date.now() / 1000),
       maximumPowerOutput_W: deviceState.maxPower,
     };
-    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower`, payload, true);
-    logger.debug(`Published maxPower topic for ${deviceState.mqttTopic}`, { payload });
+    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W`, payload, true);
+    logger.debug(`Published maxPower_W topic for ${deviceState.mqttTopic}`, { payload });
   }
 }
 

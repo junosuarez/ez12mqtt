@@ -75,7 +75,7 @@ The MQTT topic structure will be consolidated into three topics per device:
 
 *   `<MQTT_BASE_TOPIC>/<device_topic>/info`
 *   `<MQTT_BASE_TOPIC>/<device_topic>/status`
-*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower`
+*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`
 
 *   `<MQTT_BASE_TOPIC>`: The base topic, e.g., `ez12mqtt`.
 *   `<device_topic>`: The device's nickname if provided, otherwise the `deviceId` fetched from the device itself.
@@ -110,7 +110,7 @@ This topic combines data from `getDeviceInfo`. It is published at startup and wh
 | `minPower` | `minimumPowerOutput_W` | The minimum power output of the device in Watts (numeric). |
 | `description` | `deviceDescription` | The user-provided description of the device. |
 
-### `maxPower` Topic
+### `maxPower_W` Topic
 
 This topic contains the current max power setting of the device.
 
@@ -144,7 +144,7 @@ This topic combines data from `getOutputData` and `getAlarm`. It is published at
 
 #### Set Max Power
 
-*   **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/setMaxPower/set`
+*   **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`
 *   **Payload:** A number representing the desired max power in Watts.
 ## 7. Error Handling
 

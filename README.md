@@ -52,7 +52,7 @@ Data is published to three main topics per device:
 
 *   `<MQTT_BASE_TOPIC>/<device_topic>/info`
 *   `<MQTT_BASE_TOPIC>/<device_topic>/status`
-*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower`
+*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`
 
 Where `<device_topic>` is the `DEVICE_{n}_NICKNAME` if provided, otherwise it will be the `deviceId` fetched from the device itself.
 
@@ -167,6 +167,28 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
 
     And then configure `DEVICE_1_IP=127.0.0.1` in your `.env` for `ez12mqtt`.
 
+## Usage without Home Assistant
+
+If you are not using Home Assistant, you can still subscribe to the MQTT topics directly to get the data from your EZ1 microinverters.
+
+### MQTT Topic Structure
+
+```
+<MQTT_BASE_TOPIC>/
+├── <device_topic>/
+│   ├── info
+│   ├── status
+│   └── maxPower_W
+│       └── set
+└── _status
+```
+
+*   **`<MQTT_BASE_TOPIC>/<device_topic>/info`**: A retained message containing static information about the device.
+*   **`<MQTT_BASE_TOPIC>/<device_topic>/status`**: Publishes the real-time status and sensor readings from the device at the configured polling interval.
+*   **`<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`**: A retained message with the current max power setting.
+*   **`<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`**: The command topic to set the max power of the device. Publish a number (as a string) to this topic.
+*   **`<MQTT_BASE_TOPIC>/_status`**: A topic to monitor the status of the `ez12mqtt` service itself. Publishes `{"online":true, ...}` when running and has a Last Will and Testament to publish `{"online":false}` if it disconnects ungracefully.
+
 ## Home Assistant Integration
 
 `ez12mqtt` supports MQTT Discovery for seamless integration with Home Assistant.
@@ -206,10 +228,9 @@ Published at startup and when device online/offline status changes.
 | `wifiNetworkSSID` | `string` | The SSID of the Wi-Fi network the device is connected to. |
 | `deviceIPAddress` | `string` | The IP address of the device. |
 | `minimumPowerOutput_W` | `number` | The minimum power output of the device in Watts. |
-| `maximumPowerOutput_W` | `number` | The maximum power output of the device in Watts. |
 | `deviceDescription` | `string` | The user-provided description of the device. |
 
-### `maxPower` Topic Payload
+### `maxPower_W` Topic Payload
 
 | Field Name | Type | Description |
 | :--- | :--- | :--- |
