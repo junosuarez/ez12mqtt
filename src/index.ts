@@ -3,7 +3,9 @@ import { logger } from './logger.ts';
 import { EZ1API } from './api.ts';
 import { MQTTClient } from './mqtt.ts';
 
-interface DeviceState {
+import { publishDiscoveryMessages } from './homeassistant.ts';
+
+export interface DeviceState {
   ip: string;
   nickname?: string;
   description?: string;
@@ -12,6 +14,7 @@ interface DeviceState {
   isOnline: boolean;
   lastSeenAt: number | null; // Unix timestamp
   infoPublished: boolean; // To track if info topic has been published at least once
+  discoveryPublished: boolean; // To track if discovery messages have been published
 }
 
 const mqttClient = new MQTTClient();
@@ -21,10 +24,11 @@ const deviceStates: DeviceState[] = [];
 config.devices.forEach(deviceConfig => {
   deviceStates.push({
     ...deviceConfig,
-    mqttTopic: deviceConfig.nickname || '', // Will be updated with deviceId if nickname is not present
+    mqttTopic: deviceConfig.nickname || '',
     isOnline: false,
     lastSeenAt: null,
     infoPublished: false,
+    discoveryPublished: false,
   });
 });
 
@@ -59,11 +63,15 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
   const outputData = await api.getOutputData();
   const alarmInfo = await api.getAlarm();
 
-  if (outputData) {
-    deviceState.isOnline = true;
+  const wasOnline = deviceState.isOnline;
+  deviceState.isOnline = !!outputData;
+
+  if (deviceState.isOnline) {
     deviceState.lastSeenAt = Math.floor(Date.now() / 1000);
-  } else {
-    deviceState.isOnline = false;
+  }
+
+  if (deviceState.isOnline !== wasOnline) {
+    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
   }
 
   const payload: any = {
@@ -112,19 +120,21 @@ async function pollDevice(deviceState: DeviceState): Promise<void> {
   if (deviceState.isOnline && !wasOnline) {
     logger.info(`Device ${deviceState.ip} is now online. Fetching info.`);
     await fetchAndPublishInfo(deviceState);
+    if (config.homeAssistantEnable && !deviceState.discoveryPublished) {
+      publishDiscoveryMessages(deviceState, mqttClient);
+      deviceState.discoveryPublished = true;
+    }
   } else if (!deviceState.isOnline && wasOnline) {
     logger.warn(`Device ${deviceState.ip} went offline.`);
-    // The offline status is already published by fetchAndPublishStatus
   }
 }
 
 async function main(): Promise<void> {
   mqttClient.connect();
 
-  // Initial fetch for all devices
+  // Initial poll for all devices
   for (const deviceState of deviceStates) {
-    await fetchAndPublishInfo(deviceState);
-    await fetchAndPublishStatus(deviceState);
+    await pollDevice(deviceState);
   }
 
   // Set up polling interval
@@ -134,6 +144,20 @@ async function main(): Promise<void> {
     }
   }, config.pollInterval * 1000);
 }
+
+function shutdown() {
+  logger.info('Shutting down...');
+  for (const deviceState of deviceStates) {
+    if (deviceState.isOnline) {
+      mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '0', true);
+    }
+  }
+  mqttClient.disconnect();
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 main().catch(error => {
   logger.error('Application crashed:', { error: error.message, stack: error.stack });

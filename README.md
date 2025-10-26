@@ -166,6 +166,29 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
 
     And then configure `DEVICE_1_IP=127.0.0.1` in your `.env` for `ez12mqtt`.
 
+## Home Assistant Integration
+
+`ez12mqtt` supports MQTT Discovery for seamless integration with Home Assistant.
+
+### Enabling Home Assistant Integration
+
+To enable Home Assistant integration, set the following environment variables:
+
+| Environment Variable             | Description                                             | Default         |
+| :------------------------------- | :------------------------------------------------------ | :-------------- |
+| `HOMEASSISTANT_ENABLE`           | Set to `true` to enable Home Assistant integration.     | `false`         |
+| `HOMEASSISTANT_DISCOVERY_PREFIX` | The MQTT discovery topic prefix used by Home Assistant. | `homeassistant` |
+
+### Availability Topic
+
+When Home Assistant integration is enabled, a separate availability topic is published for each device:
+
+*   **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/availability`
+*   **Payload (Online):** `1`
+*   **Payload (Offline):** `0`
+
+This allows Home Assistant to accurately track the online/offline status of each device.
+
 ## Data Transformation Details
 
 ### `info` Topic Payload

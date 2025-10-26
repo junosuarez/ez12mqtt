@@ -15,6 +15,8 @@ interface Config {
   mqttBaseTopic: string;
   pollInterval: number;
   logLevel: 'INFO' | 'DEBUG';
+  homeAssistantEnable: boolean;
+  homeAssistantDiscoveryPrefix: string;
 }
 
 function validateConfig(config: Partial<Config>): Config {
@@ -85,6 +87,8 @@ const config: Config = validateConfig({
   mqttBaseTopic: process.env.MQTT_BASE_TOPIC || 'ez12mqtt',
   pollInterval: parseInt(process.env.POLL_INTERVAL || '30', 10),
   logLevel: logLevel,
+  homeAssistantEnable: process.env.HOMEASSISTANT_ENABLE === 'true',
+  homeAssistantDiscoveryPrefix: process.env.HOMEASSISTANT_DISCOVERY_PREFIX || 'homeassistant',
 });
 
 export default config;

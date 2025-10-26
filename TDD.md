@@ -183,5 +183,10 @@ A `Dockerfile` will be created for the `ez12mqtt` application. It will use a Nod
     *   Create `docker-compose.yml`.
     *   Create `.dockerignore`.
 
-10. **Documentation:**
-    *   Update `README.md` with the new configuration and setup instructions.
+## 10. Documentation
+
+*   Update `README.md` with the new configuration and setup instructions.
+
+## 11. Home Assistant Integration
+
+For details on Home Assistant integration, see `HOMEASSISTANT.md`.
