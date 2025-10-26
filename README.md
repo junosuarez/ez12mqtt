@@ -1,6 +1,87 @@
 # ez12mqtt
 
-`ez12mqtt` is a Node.js application that polls data from EZ1 microinverters and publishes it to an MQTT server. This allows for easy integration with home automation systems like Home Assistant.
+`ez12mqtt` is a Node.js application that polls data from APsystems EZ1 microinverters and publishes it to an MQTT server. This allows for easy integration with home automation systems like Home Assistant or any other MQTT-compatible service.
+
+This service acts as a bridge, providing a more flexible, universal way to access your inverter data compared to the direct [Home Assistant APsystems integration](https://www.home-assistant.io/integrations/apsystems), which is ideal if you only need to get data into Home Assistant.
+
+## Quickstart
+
+### Prerequisites
+
+*   A running MQTT broker.
+*   A container runtime environment, such as Docker or Podman.
+
+### Running with Docker Compose
+
+Create a `docker-compose.yml` file with the following content, replacing the placeholder values with your specific configuration:
+
+```yaml
+version: "3.8"
+
+services:
+  ez12mqtt:
+    image: ghcr.io/junosuarez/ez12mqtt:latest
+    container_name: ez12mqtt
+    restart: unless-stopped
+    environment:
+      # -- Required: MQTT Broker Configuration --
+      - MQTT_HOST=your-mqtt-broker-ip
+      - MQTT_PORT=1883
+      # - MQTT_USER=your-mqtt-user
+      # - MQTT_PASSWORD=your-mqtt-password
+
+      # -- Required: Device Configuration --
+      - DEVICE_1_IP=your-inverter-ip
+      - DEVICE_1_NICKNAME=my_inverter
+
+      # -- Optional: Home Assistant Integration --
+      - HOMEASSISTANT_ENABLE=true
+      - HOMEASSISTANT_DISCOVERY_PREFIX=homeassistant
+
+      # -- Optional: Other Settings --
+      - POLL_INTERVAL=30
+      - LOG_LEVEL=INFO
+```
+
+Then, run the service:
+
+```bash
+docker compose up -d
+```
+
+## Testing with a Mock Device
+
+For testing purposes, especially when your real inverter is offline (e.g., at night), you can run `ez12mqtt` against a mock EZ1 server. The mock server simulates the API and generates realistic, time-based data.
+
+Use the following `docker-compose.yml` configuration:
+
+```yaml
+version: "3.8"
+
+services:
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0.15
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+
+  mock-ez1:
+    image: ghcr.io/junosuarez/ez12mqtt:latest-mock
+    container_name: mock-ez1
+
+  ez12mqtt:
+    image: ghcr.io/junosuarez/ez12mqtt:latest
+    container_name: ez12mqtt
+    restart: unless-stopped
+    environment:
+      - MQTT_HOST=mqtt-broker
+      - DEVICE_1_IP=mock-ez1
+      - DEVICE_1_NICKNAME=mock_inverter
+      - HOMEASSISTANT_ENABLE=true
+    depends_on:
+      - mqtt-broker
+      - mock-ez1
+```
 
 ## Features
 
