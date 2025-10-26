@@ -7,12 +7,19 @@ const ASSERTION_TIMEOUT = 30 * 1000; // 30 seconds per assertion
 
 let client: MqttClient;
 
+const EXPECTED_DISCOVERY_MESSAGES = 10;
+
 const state = {
   ez12mqttOnline: false,
-  deviceInfoReceived: false,
   deviceStatusOnline: false,
   deviceStatusUpdated: false,
+  deviceAvailabilityReceived: false,
+  discoveryComplete: false,
 };
+
+let discoveryMessages = new Set<string>();
+let stateTopics = new Set<string>();
+let availabilityTopics = new Set<string>();
 
 function fail(message: string) {
   logger.error(`Assertion failed: ${message}`);
@@ -25,6 +32,7 @@ function pass(message: string) {
 }
 
 function checkAllAssertionsPassed() {
+  logger.debug('Checking all assertions:', { state });
   if (Object.values(state).every(Boolean)) {
     logger.info('All assertions passed!');
     client.end();
@@ -33,17 +41,14 @@ function checkAllAssertionsPassed() {
 }
 
 function runAssertions() {
-  const topics = [
-    `${config.mqttBaseTopic}/_status`,
-    `${config.mqttBaseTopic}/${config.devices[0].nickname || ''}/info`,
-    `${config.mqttBaseTopic}/${config.devices[0].nickname || ''}/status`,
-  ];
+  const discoveryPrefix = config.homeAssistantDiscoveryPrefix;
+  const discoveryWildcard = `${discoveryPrefix}/#`;
 
-  client.subscribe(topics, (err) => {
+  client.subscribe(discoveryWildcard, (err) => {
     if (err) {
-      fail(`Failed to subscribe to topics: ${err.message}`);
+      fail(`Failed to subscribe to discovery topic: ${err.message}`);
     }
-    logger.info('Subscribed to topics:', { topics });
+    logger.info('Subscribed to discovery topic:', { topic: discoveryWildcard });
   });
 
   let firstStatusObservedAt: number | null = null;
@@ -52,7 +57,27 @@ function runAssertions() {
     const payload = JSON.parse(message.toString());
     logger.debug(`Received message on topic: ${topic}`, { payload });
 
-    // Assertion 1: ez12mqtt is online
+    if (topic.startsWith(discoveryPrefix)) {
+      if (!state.discoveryComplete) {
+        discoveryMessages.add(topic);
+        if (payload.state_topic) stateTopics.add(payload.state_topic);
+        if (payload.availability_topic) availabilityTopics.add(payload.availability_topic);
+
+        if (discoveryMessages.size === EXPECTED_DISCOVERY_MESSAGES) {
+          pass('All discovery messages received.');
+          state.discoveryComplete = true;
+
+          const topicsToSubscribe = [...stateTopics, ...availabilityTopics, `${config.mqttBaseTopic}/_status`];
+          client.subscribe(topicsToSubscribe, (err) => {
+            if (err) {
+              fail(`Failed to subscribe to operational topics: ${err.message}`);
+            }
+            logger.info('Subscribed to operational topics:', { topics: topicsToSubscribe });
+          });
+        }
+      }
+    }
+
     if (topic === `${config.mqttBaseTopic}/_status`) {
       if (payload.online === true && payload.uptime_s >= 0) {
         if (!state.ez12mqttOnline) {
@@ -65,21 +90,7 @@ function runAssertions() {
       }
     }
 
-    // Assertion 2: Device info is published
-    if (topic === `${config.mqttBaseTopic}/${config.devices[0].nickname}/info`) {
-      if (payload.deviceIdentifier && payload.deviceDescription && payload.maximumPowerOutput_W) {
-        if (!state.deviceInfoReceived) {
-          pass('Device info received.');
-          state.deviceInfoReceived = true;
-          checkAllAssertionsPassed();
-        }
-      } else {
-        fail('Device info payload is invalid.');
-      }
-    }
-
-    // Assertion 3 & 4: Device status is published, online, and updating
-    if (topic === `${config.mqttBaseTopic}/${config.devices[0].nickname}/status`) {
+    if (stateTopics.has(topic)) {
       if (payload.isOnline === true && payload.channel1Power_W !== null) {
         if (!state.deviceStatusOnline) {
           pass('Device status is online.');
@@ -95,18 +106,31 @@ function runAssertions() {
             }
           }
         }
-      } else if (state.deviceInfoReceived) { // Only fail if we have already received info
+      } else if (state.discoveryComplete) {
         fail('Device status reported as offline.');
+      }
+    }
+
+    if (availabilityTopics.has(topic)) {
+      if (payload === 1 || payload === '1') {
+        if (!state.deviceAvailabilityReceived) {
+          pass('Device availability is online.');
+          state.deviceAvailabilityReceived = true;
+          checkAllAssertionsPassed();
+        }
+      } else {
+        fail('Device availability reported as offline.');
       }
     }
   });
 
   // Timeout for the entire test suite
   setTimeout(() => {
+    if (!state.discoveryComplete) fail('Timeout waiting for discovery messages.');
     if (!state.ez12mqttOnline) fail('Timeout waiting for ez12mqtt to come online.');
-    if (!state.deviceInfoReceived) fail('Timeout waiting for device info.');
     if (!state.deviceStatusOnline) fail('Timeout waiting for device status.');
     if (!state.deviceStatusUpdated) fail('Timeout waiting for device status update.');
+    if (!state.deviceAvailabilityReceived) fail('Timeout waiting for device availability.');
   }, ASSERTION_TIMEOUT);
 }
 

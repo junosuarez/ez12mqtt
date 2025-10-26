@@ -1,15 +1,17 @@
 import config from './config.ts';
 import { logger } from './logger.ts';
 import { MQTTClient } from './mqtt.ts';
-import { DeviceState } from './index.ts';
+import type { DeviceState } from './index.ts';
 
 const components = {
   channel1Power_W: { name: 'Channel 1 Power', type: 'sensor', device_class: 'power', state_class: 'measurement', unit: 'W' },
-  channel1EnergyToday_kWh: { name: 'Channel 1 Energy Today', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
-  channel1EnergyLifetime_kWh: { name: 'Channel 1 Energy Lifetime', type: 'sensor', device_class: 'energy', state_class: 'total', unit: 'kWh' },
+  channel1EnergySinceStartup_kWh: { name: 'Channel 1 Energy Since Startup', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
+  // Per Home Assistant documentation, lifetime energy consumption should be total_increasing.
+  channel1EnergyLifetime_kWh: { name: 'Channel 1 Energy Lifetime', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
   channel2Power_W: { name: 'Channel 2 Power', type: 'sensor', device_class: 'power', state_class: 'measurement', unit: 'W' },
-  channel2EnergyToday_kWh: { name: 'Channel 2 Energy Today', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
-  channel2EnergyLifetime_kWh: { name: 'Channel 2 Energy Lifetime', type: 'sensor', device_class: 'energy', state_class: 'total', unit: 'kWh' },
+  channel2EnergySinceStartup_kWh: { name: 'Channel 2 Energy Since Startup', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
+  // Per Home Assistant documentation, lifetime energy consumption should be total_increasing.
+  channel2EnergyLifetime_kWh: { name: 'Channel 2 Energy Lifetime', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
   isOffGrid: { name: 'Off-Grid', type: 'binary_sensor', device_class: 'problem' },
   isOutputFault: { name: 'Output Fault', type: 'binary_sensor', device_class: 'problem' },
   isChannel1ShortCircuit: { name: 'Channel 1 Short Circuit', type: 'binary_sensor', device_class: 'problem' },

@@ -82,17 +82,17 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
 
   if (outputData) {
     payload.channel1Power_W = outputData.p1;
-    payload.channel1EnergyToday_kWh = outputData.e1;
+    payload.channel1EnergySinceStartup_kWh = outputData.e1;
     payload.channel1EnergyLifetime_kWh = outputData.te1;
     payload.channel2Power_W = outputData.p2;
-    payload.channel2EnergyToday_kWh = outputData.e2;
+    payload.channel2EnergySinceStartup_kWh = outputData.e2;
     payload.channel2EnergyLifetime_kWh = outputData.te2;
   } else {
     payload.channel1Power_W = null;
-    payload.channel1EnergyToday_kWh = null;
+    payload.channel1EnergySinceStartup_kWh = null;
     payload.channel1EnergyLifetime_kWh = null;
     payload.channel2Power_W = null;
-    payload.channel2EnergyToday_kWh = null;
+    payload.channel2EnergySinceStartup_kWh = null;
     payload.channel2EnergyLifetime_kWh = null;
   }
 

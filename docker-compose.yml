@@ -8,7 +8,11 @@ services:
       - "1883:1883"
       - "9001:9001"
     volumes:
+      # This configuration is for testing purposes only and disables authentication.
+      # DO NOT USE IN PRODUCTION.
       - ./tests/test-mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
     restart: unless-stopped
 
   mock-ez1:
@@ -39,8 +43,10 @@ services:
       - DEVICE_1_IP=mock-ez1
       - DEVICE_1_NICKNAME=mock_inverter
       - DEVICE_1_DESCRIPTION="My Mock Inverter"
+      - HOMEASSISTANT_ENABLE=true
     depends_on:
       - mqtt-broker
+      - mock-ez1
     restart: unless-stopped
 
   mqtt-tester:
@@ -57,8 +63,13 @@ services:
       - DEVICE_1_IP=mock-ez1
       - DEVICE_1_NICKNAME=mock_inverter
       - DEVICE_1_DESCRIPTION="My Mock Inverter"
+      - HOMEASSISTANT_ENABLE=true
     depends_on:
       - mock-ez1
       - mqtt-broker
       - ez12mqtt
     restart: "no"
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
