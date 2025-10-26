@@ -17,7 +17,7 @@ const components = {
   isOutputFault: { name: 'Output Fault', type: 'binary_sensor', device_class: 'problem' },
   isChannel1ShortCircuit: { name: 'Channel 1 Short Circuit', type: 'binary_sensor', device_class: 'problem' },
   isChannel2ShortCircuit: { name: 'Channel 2 Short Circuit', type: 'binary_sensor', device_class: 'problem' },
-  maxPower_W: { name: 'Max Power', type: 'number', device_class: 'power', unit: 'W', mode: 'box' },
+  maxPower_W: { name: 'Max Power', type: 'number', device_class: 'power', unit: 'W', mode: 'slider' },
 };
 
 export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: MQTTClient) {
@@ -71,6 +71,8 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       payload.unit_of_measurement = component.unit;
       payload.device_class = component.device_class;
       payload.mode = component.mode;
+      payload.native_min_value = deviceState.minPower;
+      payload.native_max_value = deviceState.maxPower;
     }
 
     mqttClient.publish(discoveryTopic, payload, true);
