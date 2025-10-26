@@ -21,7 +21,7 @@ const state = {
 let discoveryMessages = new Map<string, any>();
 let stateTopics = new Set<string>();
 let availabilityTopics = new Set<string>();
-let infoTopic: string | null = null;
+let maxPowerStateTopic: string | null = null;
 let maxPowerCommandTopic: string | null = null;
 
 function fail(message: string) {
@@ -73,7 +73,7 @@ function runAssertions() {
             if (discovered.state_topic) stateTopics.add(discovered.state_topic);
             if (discovered.availability_topic) availabilityTopics.add(discovered.availability_topic);
             if (discovered.name === 'Max Power') {
-              infoTopic = discovered.state_topic;
+              maxPowerStateTopic = discovered.state_topic;
               maxPowerCommandTopic = discovered.command_topic;
             }
           }
@@ -99,7 +99,7 @@ function runAssertions() {
       }
     }
 
-    if (topic === infoTopic) {
+    if (topic === maxPowerStateTopic) {
       if (initialMaxPower === null) {
         initialMaxPower = payload.maximumPowerOutput_W;
         const newMaxPower = initialMaxPower - 50;
@@ -116,7 +116,7 @@ function runAssertions() {
       }
     }
 
-    if (stateTopics.has(topic) && topic !== infoTopic) {
+    if (stateTopics.has(topic) && topic !== maxPowerStateTopic) {
       if (payload.isOnline === true && payload.channel1Power_W !== null) {
         if (!state.deviceStatusOnline) {
           pass('Device status is online.');

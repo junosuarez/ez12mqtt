@@ -48,10 +48,11 @@ LOG_LEVEL=DEBUG
 
 ## MQTT Topic Structure
 
-Data is published to two main topics per device:
+Data is published to three main topics per device:
 
 *   `<MQTT_BASE_TOPIC>/<device_topic>/info`
 *   `<MQTT_BASE_TOPIC>/<device_topic>/status`
+*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower`
 
 Where `<device_topic>` is the `DEVICE_{n}_NICKNAME` if provided, otherwise it will be the `deviceId` fetched from the device itself.
 
@@ -205,6 +206,13 @@ Published at startup and when device online/offline status changes.
 | `minimumPowerOutput_W` | `number` | The minimum power output of the device in Watts. |
 | `maximumPowerOutput_W` | `number` | The maximum power output of the device in Watts. |
 | `deviceDescription` | `string` | The user-provided description of the device. |
+
+### `maxPower` Topic Payload
+
+| Field Name | Type | Description |
+| :--- | :--- | :--- |
+| `observedAt` | `number` | Unix epoch seconds UTC when the data was observed. |
+| `maximumPowerOutput_W` | `number` | The maximum power output of the device in Watts. |
 
 ### `status` Topic Payload
 
