@@ -71,10 +71,11 @@ The configuration manager will parse these environment variables and create a li
 
 ## 5. MQTT Topic Hierarchy
 
-The MQTT topic structure will be consolidated into two topics per device:
+The MQTT topic structure will be consolidated into three topics per device:
 
 *   `<MQTT_BASE_TOPIC>/<device_topic>/info`
 *   `<MQTT_BASE_TOPIC>/<device_topic>/status`
+*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower`
 
 *   `<MQTT_BASE_TOPIC>`: The base topic, e.g., `ez12mqtt`.
 *   `<device_topic>`: The device's nickname if provided, otherwise the `deviceId` fetched from the device itself.
@@ -98,7 +99,7 @@ An `observedAt` timestamp (Unix epoch seconds UTC) will be added to each payload
 
 ### `info` Topic
 
-This topic combines data from `getDeviceInfo` and `getMaxPower`. It is published at startup and when the device's online status changes.
+This topic combines data from `getDeviceInfo`. It is published at startup and when the device's online status changes.
 
 | Original Name | New Name | Description |
 | :--- | :--- | :--- |
@@ -107,8 +108,15 @@ This topic combines data from `getDeviceInfo` and `getMaxPower`. It is published
 | `ssid` | `wifiNetworkSSID` | The SSID of the Wi-Fi network the device is connected to. |
 | `ipAddr` | `deviceIPAddress` | The IP address of the device. |
 | `minPower` | `minimumPowerOutput_W` | The minimum power output of the device in Watts (numeric). |
-| `maxPower` | `maximumPowerOutput_W` | The maximum power output of the device in Watts (numeric). |
 | `description` | `deviceDescription` | The user-provided description of the device. |
+
+### `maxPower` Topic
+
+This topic contains the current max power setting of the device.
+
+| Original Name | New Name | Description |
+| :--- | :--- | :--- |
+| `maxPower` | `maximumPowerOutput_W` | The maximum power output of the device in Watts (numeric). |
 
 ### `status` Topic
 

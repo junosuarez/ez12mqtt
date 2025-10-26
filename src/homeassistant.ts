@@ -65,7 +65,8 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       payload.device_class = component.device_class;
     } else if (component.type === 'number') {
       payload.command_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`;
-      payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/info`;
+      payload.command_template = '{{ value }}';
+      payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower`;
       payload.value_template = `{{ value_json.maximumPowerOutput_W }}`;
       payload.unit_of_measurement = component.unit;
       payload.device_class = component.device_class;

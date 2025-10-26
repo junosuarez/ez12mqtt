@@ -37,16 +37,14 @@ config.devices.forEach(deviceConfig => {
 async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
   const api = new EZ1API(deviceState.ip);
   const deviceInfo = await api.getDeviceInfo();
-  const maxPower = await api.getMaxPower();
 
-  if (deviceInfo && maxPower) {
+  if (deviceInfo) {
     deviceState.deviceId = deviceInfo.deviceId;
     if (!deviceState.nickname) {
       deviceState.mqttTopic = deviceInfo.deviceId;
     }
 
     deviceState.minPower = parseFloat(deviceInfo.minPower);
-    deviceState.maxPower = parseFloat(maxPower.power);
 
     const payload = {
       observedAt: Math.floor(Date.now() / 1000),
@@ -55,12 +53,26 @@ async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
       wifiNetworkSSID: deviceInfo.ssid,
       deviceIPAddress: deviceInfo.ipAddr,
       minimumPowerOutput_W: deviceState.minPower,
-      maximumPowerOutput_W: deviceState.maxPower,
       deviceDescription: deviceState.description,
     };
     mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/info`, payload, true);
     logger.debug(`Published info topic for ${deviceState.mqttTopic}`, { payload });
     deviceState.infoPublished = true;
+  }
+}
+
+async function fetchAndPublishMaxPower(deviceState: DeviceState): Promise<void> {
+  const api = new EZ1API(deviceState.ip);
+  const maxPower = await api.getMaxPower();
+
+  if (maxPower) {
+    deviceState.maxPower = parseFloat(maxPower.power);
+    const payload = {
+      observedAt: Math.floor(Date.now() / 1000),
+      maximumPowerOutput_W: deviceState.maxPower,
+    };
+    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower`, payload, true);
+    logger.debug(`Published maxPower topic for ${deviceState.mqttTopic}`, { payload });
   }
 }
 
@@ -128,6 +140,9 @@ async function pollDevice(deviceState: DeviceState): Promise<void> {
 
   const wasOnline = deviceState.isOnline;
   await fetchAndPublishStatus(deviceState);
+  if (deviceState.isOnline) {
+    await fetchAndPublishMaxPower(deviceState);
+  }
 
   if (deviceState.isOnline && !wasOnline) {
     logger.info(`Device ${deviceState.ip} is now online. Fetching info.`);
@@ -159,8 +174,8 @@ async function main(): Promise<void> {
           logger.info(`Setting max power for ${deviceTopic} to ${power}`);
           const api = new EZ1API(deviceState.ip);
           api.setMaxPower(power).then(() => {
-            logger.debug(`setMaxPower successful for ${deviceTopic}. Re-publishing info topic.`);
-            fetchAndPublishInfo(deviceState);
+            logger.debug(`setMaxPower successful for ${deviceTopic}. Re-publishing maxPower topic.`);
+            fetchAndPublishMaxPower(deviceState);
           }).catch(error => {
             logger.error(`Failed to set max power for ${deviceTopic}: ${error.message}`);
           });
