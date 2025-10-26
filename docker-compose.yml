@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0.15
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    restart: unless-stopped
+
+  mock-ez1:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    container_name: mock-ez1
+    ports:
+      - "8050:8050"
+    environment:
+      - MOCK_DEVICE_ID=E28000000238
+      - MOCK_IP_ADDR=mock-ez1
+      - MOCK_PORT=8050
+    restart: unless-stopped
+
+  ez12mqtt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ez12mqtt
+    environment:
+      - MQTT_HOST=mqtt-broker
+      - MQTT_PORT=1883
+      - MQTT_BASE_TOPIC=ez12mqtt_test
+      - POLL_INTERVAL=5
+      - LOG_LEVEL=DEBUG
+      - DEVICE_1_IP=mock-ez1
+      - DEVICE_1_NICKNAME=mock_inverter
+      - DEVICE_1_DESCRIPTION="My Mock Inverter"
+    depends_on:
+      - mqtt-broker
+      - mock-ez1
+    restart: unless-stopped
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:

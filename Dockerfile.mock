@@ -1,0 +1,18 @@
+# Use an official Node.js runtime as a parent image
+FROM node:24-alpine
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy package.json and package-lock.json to the working directory
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy the mock server code
+COPY src ./src
+COPY tests/mock-ez1-server.ts ./tests/mock-ez1-server.ts
+
+# Command to run the mock server
+CMD ["node", "--experimental-strip-types", "tests/mock-ez1-server.ts"]
