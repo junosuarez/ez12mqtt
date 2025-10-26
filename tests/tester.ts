@@ -112,14 +112,14 @@ function runAssertions() {
     }
 
     if (availabilityTopics.has(topic)) {
-      if (payload === 1 || payload === '1') {
+      if (payload === 1) {
         if (!state.deviceAvailabilityReceived) {
           pass('Device availability is online.');
           state.deviceAvailabilityReceived = true;
           checkAllAssertionsPassed();
         }
       } else {
-        fail('Device availability reported as offline.');
+        fail(`Device availability reported as offline or invalid: ${payload}`);
       }
     }
   });

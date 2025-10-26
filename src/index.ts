@@ -71,7 +71,7 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
   }
 
   if (deviceState.isOnline !== wasOnline) {
-    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
+    mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
   }
 
   const payload: any = {
@@ -149,7 +149,7 @@ function shutdown() {
   logger.info('Shutting down...');
   for (const deviceState of deviceStates) {
     if (deviceState.isOnline) {
-      mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '0', true);
+      mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '0', true);
     }
   }
   mqttClient.disconnect();

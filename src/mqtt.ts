@@ -70,8 +70,16 @@ export class MQTTClient {
     }
 
     const payloadString = JSON.stringify(payload);
+    this.publishRaw(topic, payloadString, retain);
+  }
 
-    this.client.publish(topic, payloadString, { qos: 0, retain }, (error) => {
+  public publishRaw(topic: string, payload: string, retain: boolean = false): void {
+    if (!this.client || !this.client.connected) {
+      logger.warn(`MQTT client not connected. Cannot publish to topic: ${topic}`);
+      return;
+    }
+
+    this.client.publish(topic, payload, { qos: 0, retain }, (error) => {
       if (error) {
         logger.error(`Failed to publish message to topic ${topic}: ${error.message}`);
       } else {
