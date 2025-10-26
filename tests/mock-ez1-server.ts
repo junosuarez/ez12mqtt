@@ -17,6 +17,7 @@ const state = {
   e2: 10, // Initial energy for channel 2 in kWh
   te2: 1000, // Initial total energy for channel 2 in kWh
   lastRequestTime: Date.now(),
+  currentMaxPower: parseInt(MOCK_MAX_POWER, 10), // Initial max power
 };
 
 // Simple Markov Chain for power simulation
@@ -119,7 +120,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200);
     res.end(JSON.stringify({
       data: {
-        power: MOCK_MAX_POWER,
+        power: state.currentMaxPower.toString(),
       },
       message: 'SUCCESS',
       deviceId: MOCK_DEVICE_ID,
@@ -127,10 +128,13 @@ const server = http.createServer(async (req, res) => {
   } else if (req.url && req.url.startsWith('/setMaxPower')) {
     const urlParams = new URLSearchParams(req.url.split('?')[1]);
     const p = urlParams.get('p');
+    if (p) {
+      state.currentMaxPower = parseInt(p, 10);
+    }
     res.writeHead(200);
     res.end(JSON.stringify({
       data: {
-        power: p || MOCK_MAX_POWER,
+        power: state.currentMaxPower.toString(),
       },
       message: 'SUCCESS',
       deviceId: MOCK_DEVICE_ID,

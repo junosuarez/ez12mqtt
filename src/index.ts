@@ -15,6 +15,8 @@ export interface DeviceState {
   lastSeenAt: number | null; // Unix timestamp
   infoPublished: boolean; // To track if info topic has been published at least once
   discoveryPublished: boolean; // To track if discovery messages have been published
+  minPower?: number;
+  maxPower?: number;
 }
 
 const mqttClient = new MQTTClient();
@@ -43,17 +45,21 @@ async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
       deviceState.mqttTopic = deviceInfo.deviceId;
     }
 
+    deviceState.minPower = parseFloat(deviceInfo.minPower);
+    deviceState.maxPower = parseFloat(maxPower.power);
+
     const payload = {
       observedAt: Math.floor(Date.now() / 1000),
       deviceIdentifier: deviceInfo.deviceId,
       deviceVersion: deviceInfo.devVer,
       wifiNetworkSSID: deviceInfo.ssid,
       deviceIPAddress: deviceInfo.ipAddr,
-      minimumPowerOutput_W: parseFloat(deviceInfo.minPower),
-      maximumPowerOutput_W: parseFloat(maxPower.power),
+      minimumPowerOutput_W: deviceState.minPower,
+      maximumPowerOutput_W: deviceState.maxPower,
       deviceDescription: deviceState.description,
     };
     mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/info`, payload, true);
+    logger.debug(`Published info topic for ${deviceState.mqttTopic}`, { payload });
     deviceState.infoPublished = true;
   }
 }
@@ -87,6 +93,9 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
     payload.channel2Power_W = outputData.p2;
     payload.channel2EnergySinceStartup_kWh = outputData.e2;
     payload.channel2EnergyLifetime_kWh = outputData.te2;
+    payload.totalPower_W = outputData.p1 + outputData.p2;
+    payload.totalEnergySinceStartup_kWh = outputData.e1 + outputData.e2;
+    payload.totalEnergyLifetime_kWh = outputData.te1 + outputData.te2;
   } else {
     payload.channel1Power_W = null;
     payload.channel1EnergySinceStartup_kWh = null;
@@ -94,6 +103,9 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
     payload.channel2Power_W = null;
     payload.channel2EnergySinceStartup_kWh = null;
     payload.channel2EnergyLifetime_kWh = null;
+    payload.totalPower_W = null;
+    payload.totalEnergySinceStartup_kWh = null;
+    payload.totalEnergyLifetime_kWh = null;
   }
 
   if (alarmInfo) {
@@ -130,11 +142,43 @@ async function pollDevice(deviceState: DeviceState): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  mqttClient.connect();
+  mqttClient.connect((topic, message) => {
+    const messageString = message.toString();
+    logger.debug(`Received message on topic: ${topic}`, { payload: messageString });
+
+    const setMaxPowerRegex = new RegExp(`^${config.mqttBaseTopic}/(.+)/maxPower_W/set$`);
+    const match = topic.match(setMaxPowerRegex);
+
+    if (match) {
+      const deviceTopic = match[1];
+      const deviceState = deviceStates.find(d => d.mqttTopic === deviceTopic);
+
+      if (deviceState) {
+        const power = parseInt(messageString, 10);
+        if (!isNaN(power) && deviceState.minPower && deviceState.maxPower && power >= deviceState.minPower && power <= deviceState.maxPower) {
+          logger.info(`Setting max power for ${deviceTopic} to ${power}`);
+          const api = new EZ1API(deviceState.ip);
+          api.setMaxPower(power).then(() => {
+            logger.debug(`setMaxPower successful for ${deviceTopic}. Re-publishing info topic.`);
+            fetchAndPublishInfo(deviceState);
+          }).catch(error => {
+            logger.error(`Failed to set max power for ${deviceTopic}: ${error.message}`);
+          });
+        } else {
+          logger.warn(`Invalid power value received for ${deviceTopic}: ${messageString}`);
+        }
+      } else {
+        logger.warn(`Received setMaxPower command for unknown device: ${deviceTopic}`);
+      }
+    }
+  });
 
   // Initial poll for all devices
   for (const deviceState of deviceStates) {
     await pollDevice(deviceState);
+    if (config.homeAssistantEnable) {
+      mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
+    }
   }
 
   // Set up polling interval

@@ -83,4 +83,8 @@ export class EZ1API {
   async getAlarm(): Promise<AlarmInfo | null> {
     return this.get<AlarmInfo>('/getAlarm');
   }
+
+  async setMaxPower(power: number): Promise<MaxPower | null> {
+    return this.get<MaxPower>(`/setMaxPower?p=${power}`);
+  }
 }

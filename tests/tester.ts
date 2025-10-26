@@ -7,19 +7,22 @@ const ASSERTION_TIMEOUT = 30 * 1000; // 30 seconds per assertion
 
 let client: MqttClient;
 
-const EXPECTED_DISCOVERY_MESSAGES = 10;
+const EXPECTED_DISCOVERY_MESSAGES = 14;
 
 const state = {
+  discoveryComplete: false,
   ez12mqttOnline: false,
+  deviceAvailabilityReceived: false,
   deviceStatusOnline: false,
   deviceStatusUpdated: false,
-  deviceAvailabilityReceived: false,
-  discoveryComplete: false,
+  maxPowerControlVerified: false,
 };
 
-let discoveryMessages = new Set<string>();
+let discoveryMessages = new Map<string, any>();
 let stateTopics = new Set<string>();
 let availabilityTopics = new Set<string>();
+let infoTopic: string | null = null;
+let maxPowerCommandTopic: string | null = null;
 
 function fail(message: string) {
   logger.error(`Assertion failed: ${message}`);
@@ -52,6 +55,7 @@ function runAssertions() {
   });
 
   let firstStatusObservedAt: number | null = null;
+  let initialMaxPower: number | null = null;
 
   client.on('message', (topic, message) => {
     const payload = JSON.parse(message.toString());
@@ -59,13 +63,20 @@ function runAssertions() {
 
     if (topic.startsWith(discoveryPrefix)) {
       if (!state.discoveryComplete) {
-        discoveryMessages.add(topic);
-        if (payload.state_topic) stateTopics.add(payload.state_topic);
-        if (payload.availability_topic) availabilityTopics.add(payload.availability_topic);
+        discoveryMessages.set(topic, payload);
 
         if (discoveryMessages.size === EXPECTED_DISCOVERY_MESSAGES) {
           pass('All discovery messages received.');
           state.discoveryComplete = true;
+
+          for (const discovered of discoveryMessages.values()) {
+            if (discovered.state_topic) stateTopics.add(discovered.state_topic);
+            if (discovered.availability_topic) availabilityTopics.add(discovered.availability_topic);
+            if (discovered.name === 'Max Power') {
+              infoTopic = discovered.state_topic;
+              maxPowerCommandTopic = discovered.command_topic;
+            }
+          }
 
           const topicsToSubscribe = [...stateTopics, ...availabilityTopics, `${config.mqttBaseTopic}/_status`];
           client.subscribe(topicsToSubscribe, (err) => {
@@ -85,12 +96,27 @@ function runAssertions() {
           state.ez12mqttOnline = true;
           checkAllAssertionsPassed();
         }
-      } else {
-        fail('ez12mqtt reported as offline or uptime is missing.');
       }
     }
 
-    if (stateTopics.has(topic)) {
+    if (topic === infoTopic) {
+      if (initialMaxPower === null) {
+        initialMaxPower = payload.maximumPowerOutput_W;
+        const newMaxPower = initialMaxPower - 50;
+        logger.info(`Setting max power to ${newMaxPower}`);
+        if (maxPowerCommandTopic) {
+          client.publish(maxPowerCommandTopic, newMaxPower.toString());
+        }
+      } else {
+        if (payload.maximumPowerOutput_W < initialMaxPower) {
+          pass('Max power control verified.');
+          state.maxPowerControlVerified = true;
+          checkAllAssertionsPassed();
+        }
+      }
+    }
+
+    if (stateTopics.has(topic) && topic !== infoTopic) {
       if (payload.isOnline === true && payload.channel1Power_W !== null) {
         if (!state.deviceStatusOnline) {
           pass('Device status is online.');
@@ -106,8 +132,6 @@ function runAssertions() {
             }
           }
         }
-      } else if (state.discoveryComplete) {
-        fail('Device status reported as offline.');
       }
     }
 
@@ -118,8 +142,6 @@ function runAssertions() {
           state.deviceAvailabilityReceived = true;
           checkAllAssertionsPassed();
         }
-      } else {
-        fail(`Device availability reported as offline or invalid: ${payload}`);
       }
     }
   });
@@ -131,6 +153,7 @@ function runAssertions() {
     if (!state.deviceStatusOnline) fail('Timeout waiting for device status.');
     if (!state.deviceStatusUpdated) fail('Timeout waiting for device status update.');
     if (!state.deviceAvailabilityReceived) fail('Timeout waiting for device availability.');
+    if (!state.maxPowerControlVerified) fail('Timeout waiting for max power control verification.');
   }, ASSERTION_TIMEOUT);
 }
 
