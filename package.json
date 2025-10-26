@@ -8,7 +8,10 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "node src/index.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:container:app": "podman build -f Dockerfile -t ez12mqtt:latest . && podman push localhost/ez12mqtt:latest ghcr.io/junosuarez/ez12mqtt:latest",
+    "build:container:mock": "podman build -f Dockerfile.mock -t ez12mqtt:latest-mock . && podman push localhost/ez12mqtt:latest-mock ghcr.io/junosuarez/ez12mqtt:latest-mock",
+    "build:container": "npm run build:container:app && npm run build:container:mock"
   },
   "keywords": [],
   "author": "",
