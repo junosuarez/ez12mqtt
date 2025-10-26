@@ -48,10 +48,13 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       payload_not_available: '0',
     };
 
+    if (component.type !== 'number') {
+      payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/status`;
+    }
+
     if (component.value_template) {
       payload.value_template = component.value_template;
     } else {
-      payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/status`;
       payload.value_template = `{{ value_json.${key} }}`;
     }
 

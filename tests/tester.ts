@@ -63,6 +63,22 @@ function runAssertions() {
 
     if (topic.startsWith(discoveryPrefix)) {
       if (!state.discoveryComplete) {
+        // Validate the discovery payload
+        if (!payload.unique_id || !payload.name || !payload.device || !payload.device.identifiers || !payload.availability_topic) {
+          fail(`Invalid discovery payload for topic ${topic}: Missing required fields.`);
+        }
+        const componentType = topic.split('/')[1];
+        if (componentType === 'sensor' || componentType === 'binary_sensor') {
+          if (!payload.state_topic || !payload.value_template) {
+            fail(`Invalid discovery payload for ${componentType} ${topic}: Missing state_topic or value_template.`);
+          }
+        }
+        if (componentType === 'number') {
+          if (!payload.command_topic || !payload.state_topic) {
+            fail(`Invalid discovery payload for ${componentType} ${topic}: Missing command_topic or state_topic.`);
+          }
+        }
+
         discoveryMessages.set(topic, payload);
 
         if (discoveryMessages.size === EXPECTED_DISCOVERY_MESSAGES) {

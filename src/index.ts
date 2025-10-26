@@ -147,6 +147,7 @@ async function pollDevice(deviceState: DeviceState): Promise<void> {
   if (deviceState.isOnline && !wasOnline) {
     logger.info(`Device ${deviceState.ip} is now online. Fetching info.`);
     await fetchAndPublishInfo(deviceState);
+    await fetchAndPublishMaxPower(deviceState);
     if (config.homeAssistantEnable && !deviceState.discoveryPublished) {
       publishDiscoveryMessages(deviceState, mqttClient);
       deviceState.discoveryPublished = true;

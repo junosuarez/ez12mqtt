@@ -4,7 +4,7 @@ import { logger } from '../src/logger.ts';
 const MOCK_DEVICE_ID = process.env.MOCK_DEVICE_ID || 'E28000000238';
 const MOCK_IP_ADDR = process.env.MOCK_IP_ADDR || '10.10.8.81';
 const MOCK_MIN_POWER = process.env.MOCK_MIN_POWER || '40';
-const MOCK_MAX_POWER = process.env.MOCK_MAX_POWER || '1000';
+const MOCK_MAX_POWER = process.env.MOCK_MAX_POWER || '800';
 
 const MOCK_PORT = parseInt(process.env.MOCK_PORT || '8050', 10);
 
@@ -71,8 +71,8 @@ function updateState() {
   // Update power state and generate new power values
   powerState1 = getNextPowerState(powerState1);
   powerState2 = getNextPowerState(powerState2);
-  state.p1 = generatePower(powerState1);
-  state.p2 = generatePower(powerState2);
+  state.p1 = Math.min(generatePower(powerState1), state.currentMaxPower);
+  state.p2 = Math.min(generatePower(powerState2), state.currentMaxPower);
 }
 
 function sleep(ms: number): Promise<void> {
