@@ -15,4 +15,4 @@ COPY src ./src
 COPY tests/mock-ez1-server.ts ./tests/mock-ez1-server.ts
 
 # Command to run the mock server
-CMD ["node", "--experimental-strip-types", "tests/mock-ez1-server.ts"]
+CMD ["node", "tests/mock-ez1-server.ts"]

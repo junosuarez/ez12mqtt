@@ -10,11 +10,9 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
-# Copy the rest of the application code
+# Copy the application and test code
 COPY src ./src
+COPY tests ./tests
 
-# Expose the port the app runs on (if any, though this app is outbound only)
-# EXPOSE 8050
-
-# Command to run the application
-CMD ["node", "src/index.ts"]
+# Command to run the tester script
+CMD ["node", "tests/tester.ts"]

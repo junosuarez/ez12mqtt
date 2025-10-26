@@ -17,6 +17,12 @@ export class MQTTClient {
       reconnectPeriod: 1000,
       ...(config.mqttUser && { username: config.mqttUser }),
       ...(config.mqttPassword && { password: config.mqttPassword }),
+      will: {
+        topic: `${config.mqttBaseTopic}/_status`,
+        payload: JSON.stringify({ online: false }),
+        qos: 1,
+        retain: true,
+      },
     };
   }
 
@@ -26,6 +32,7 @@ export class MQTTClient {
 
     this.client.on('connect', () => {
       logger.info('Successfully connected to MQTT broker.');
+      this.startHeartbeat();
     });
 
     this.client.on('error', (error) => {
@@ -42,7 +49,21 @@ export class MQTTClient {
     });
   }
 
-  public publish(topic: string, payload: object): void {
+  private startHeartbeat(): void {
+    const publishStatus = () => {
+      const payload = {
+        online: true,
+        uptime_s: Math.floor(process.uptime()),
+      };
+      this.publish(`${config.mqttBaseTopic}/_status`, payload, true);
+    };
+
+    // Publish immediately and then every 30 seconds
+    publishStatus();
+    setInterval(publishStatus, 30 * 1000);
+  }
+
+  public publish(topic: string, payload: object, retain: boolean = false): void {
     if (!this.client || !this.client.connected) {
       logger.warn(`MQTT client not connected. Cannot publish to topic: ${topic}`);
       return;
@@ -50,12 +71,12 @@ export class MQTTClient {
 
     const payloadString = JSON.stringify(payload);
 
-    this.client.publish(topic, payloadString, { qos: 0, retain: false }, (error) => {
+    this.client.publish(topic, payloadString, { qos: 0, retain }, (error) => {
       if (error) {
         logger.error(`Failed to publish message to topic ${topic}: ${error.message}`);
       } else {
         if (config.logLevel === 'DEBUG') {
-          logger.debug(`Published to MQTT topic: ${topic}`, { payload: payload });
+          logger.debug(`Published to MQTT topic: ${topic}`, { payload: payload, retain });
         }
       }
     });
