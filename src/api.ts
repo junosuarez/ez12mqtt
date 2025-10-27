@@ -50,8 +50,13 @@ export class EZ1API {
   }
 
   private async get<T>(endpoint: string): Promise<T | null> {
+    const url = `${this.client.defaults.baseURL}${endpoint}`;
+    const requestStartTime = Date.now();
     try {
       const response = await this.client.get<ApiResponse<T>>(endpoint);
+      const responseTime = Date.now() - requestStartTime;
+      logger.debug(`API Response - URL: ${url}, Time: ${responseTime}ms, Status: ${response.status}, Body: ${JSON.stringify(response.data)}`);
+
       if (response.data.message === 'SUCCESS') {
         return response.data.data;
       } else {
@@ -59,6 +64,13 @@ export class EZ1API {
         return null;
       }
     } catch (error: any) {
+      const responseTime = Date.now() - requestStartTime;
+      if (error.response) {
+        logger.info(`API Error Response - URL: ${url}, Time: ${responseTime}ms, Status: ${error.response.status}, Body: ${JSON.stringify(error.response.data)}`);
+      } else if (error.request) {
+        logger.info(`API Error Request - URL: ${url}, Time: ${responseTime}ms, No response received.`);
+      }
+
       if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'EHOSTUNREACH') {
         logger.debug(`Device ${this.ip} is offline or unreachable for ${endpoint}.`);
       } else {

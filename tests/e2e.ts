@@ -12,6 +12,8 @@ const DEVICE_NICKNAME = 'mock_inverter';
 const OFFLINE_DEVICE_NICKNAME = 'offline_inverter';
 const HOMEASSISTANT_DISCOVERY_PREFIX = 'homeassistant';
 
+const logOnPass = process.argv.includes('--log-on-pass');
+
 interface TestOptions {
   testName: string;
   prePopulate: boolean;
@@ -19,7 +21,7 @@ interface TestOptions {
   expectOfflineDevice: boolean;
 }
 
-async function runTest(options: TestOptions) {
+async function runTest(options: TestOptions, logOnPass: boolean) {
   logger.info(`--- Running test: ${options.testName} ---`);
 
   const network = await new Network().start();
@@ -117,6 +119,13 @@ async function runTest(options: TestOptions) {
     logger.error(`Test failed: ${e.message}`);
     throw e;
   } finally {
+    if (logOnPass) {
+      console.error('--- ez12mqtt container logs (success) ---');
+      const logs = await ez12mqttContainer.logs();
+      logs.pipe(process.stderr);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.error('--- end of logs ---');
+    }
     await ez12mqttContainer.stop();
     await mockContainer.stop();
     await mqttContainer.stop();
@@ -328,13 +337,13 @@ async function main() {
       prePopulate: true,
       expectedDiscoveryMessages: 28,
       expectOfflineDevice: true,
-    });
+    }, logOnPass);
     await runTest({
       testName: 'Empty Broker',
       prePopulate: false,
       expectedDiscoveryMessages: 14,
       expectOfflineDevice: false,
-    });
+    }, logOnPass);
   } catch (e) {
     logger.error('A test failed, exiting.');
     process.exit(1);
