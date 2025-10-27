@@ -8,8 +8,8 @@ This service acts as a bridge, providing a more flexible, universal way to acces
 
 ### Prerequisites
 
-*   A running MQTT broker.
-*   A container runtime environment, such as Docker or Podman.
+- A running MQTT broker.
+- A container runtime environment, such as Docker or Podman.
 
 ### Running with Docker Compose
 
@@ -32,7 +32,9 @@ services:
 
       # -- Required: Device Configuration --
       - DEVICE_1_IP=your-inverter-ip
+      #   Pro-tip: set a fixed IP at your router
       - DEVICE_1_NICKNAME=my_inverter
+      # Additional devices can be added, eg DEVICE_2_...
 
       # -- Optional: Home Assistant Integration --
       - HOMEASSISTANT_ENABLE=true
@@ -85,31 +87,31 @@ services:
 
 ## Features
 
-*   Polls EZ1 microinverter data (device info, output data, alarms).
-*   Publishes data to MQTT with a structured topic hierarchy.
-*   Configurable via environment variables.
-*   Dockerized for easy deployment.
-*   Supports multiple EZ1 devices.
-*   Transforms API response data into verbose, self-documenting MQTT payloads.
-*   Includes `observedAt` timestamp in MQTT payloads.
-*   Detects device online/offline status and publishes accordingly.
+- Polls EZ1 microinverter data (device info, output data, alarms).
+- Publishes data to MQTT with a structured topic hierarchy.
+- Configurable via environment variables.
+- Dockerized for easy deployment.
+- Supports multiple EZ1 devices.
+- Transforms API response data into verbose, self-documenting MQTT payloads.
+- Includes `observedAt` timestamp in MQTT payloads.
+- Detects device online/offline status and publishes accordingly.
 
 ## Configuration
 
 `ez12mqtt` is configured using environment variables. Below is a list of available environment variables:
 
-| Environment Variable | Description | Default |
-| :--- | :--- | :--- |
-| `DEVICE_{n}_IP` | The IP address of the {n}th device (1-based index). | (Required) |
-| `DEVICE_{n}_NICKNAME` | The nickname of the {n}th device. This will be used in the MQTT topic. | |
-| `DEVICE_{n}_DESCRIPTION`| The description of the {n}th device. | |
-| `MQTT_HOST` | The hostname or IP address of the MQTT broker. | `localhost` |
-| `MQTT_PORT` | The port of the MQTT broker. | `1883` |
-| `MQTT_USER` | The username for MQTT authentication. | |
-| `MQTT_PASSWORD` | The password for MQTT authentication. | |
-| `MQTT_BASE_TOPIC` | The base topic for all MQTT messages. | `ez12mqtt` |
-| `POLL_INTERVAL` | The interval in seconds to poll the fast-changing device data (`getOutputData`, `getAlarm`). | `30` |
-| `LOG_LEVEL` | The log level for the application. Can be `INFO` or `DEBUG`. | `INFO` |
+| Environment Variable     | Description                                                                                  | Default     |
+| :----------------------- | :------------------------------------------------------------------------------------------- | :---------- |
+| `DEVICE_{n}_IP`          | The IP address of the {n}th device (1-based index).                                          | (Required)  |
+| `DEVICE_{n}_NICKNAME`    | The nickname of the {n}th device. This will be used in the MQTT topic.                       |             |
+| `DEVICE_{n}_DESCRIPTION` | The description of the {n}th device.                                                         |             |
+| `MQTT_HOST`              | The hostname or IP address of the MQTT broker.                                               | `localhost` |
+| `MQTT_PORT`              | The port of the MQTT broker.                                                                 | `1883`      |
+| `MQTT_USER`              | The username for MQTT authentication.                                                        |             |
+| `MQTT_PASSWORD`          | The password for MQTT authentication.                                                        |             |
+| `MQTT_BASE_TOPIC`        | The base topic for all MQTT messages.                                                        | `ez12mqtt`  |
+| `POLL_INTERVAL`          | The interval in seconds to poll the fast-changing device data (`getOutputData`, `getAlarm`). | `30`        |
+| `LOG_LEVEL`              | The log level for the application. Can be `INFO` or `DEBUG`.                                 | `INFO`      |
 
 ### Example Configuration
 
@@ -131,9 +133,9 @@ LOG_LEVEL=DEBUG
 
 Data is published to three main topics per device:
 
-*   `<MQTT_BASE_TOPIC>/<device_topic>/info`
-*   `<MQTT_BASE_TOPIC>/<device_topic>/status`
-*   `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`
+- `<MQTT_BASE_TOPIC>/<device_topic>/info`
+- `<MQTT_BASE_TOPIC>/<device_topic>/status`
+- `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`
 
 Where `<device_topic>` is the `DEVICE_{n}_NICKNAME` if provided, otherwise it will be the `deviceId` fetched from the device itself.
 
@@ -148,11 +150,12 @@ To run `ez12mqtt` along with a mock EZ1 API server and an MQTT broker for testin
     ```
 
     This will:
-    *   Build the `ez12mqtt` application image.
-    *   Build the `mock-ez1` server image.
-    *   Start an `eclipse-mosquitto` MQTT broker.
-    *   Start the `mock-ez1` server, simulating an EZ1 microinverter at `http://mock-ez1:8050`.
-    *   Start the `ez12mqtt` application, configured to connect to the `mock-ez1` server and the `mqtt-broker`.
+
+    - Build the `ez12mqtt` application image.
+    - Build the `mock-ez1` server image.
+    - Start an `eclipse-mosquitto` MQTT broker.
+    - Start the `mock-ez1` server, simulating an EZ1 microinverter at `http://mock-ez1:8050`.
+    - Start the `ez12mqtt` application, configured to connect to the `mock-ez1` server and the `mqtt-broker`.
 
 2.  **Run MQTT Tester:**
 
@@ -212,8 +215,8 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
 
 ### Prerequisites
 
-*   Node.js (v20 or later)
-*   npm
+- Node.js (v20 or later)
+- npm
 
 ### Installation
 
@@ -248,6 +251,22 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
 
     And then configure `DEVICE_1_IP=127.0.0.1` in your `.env` for `ez12mqtt`.
 
+### Testing
+
+Run `node tests/e2e.ts`
+
+#### Testcontainers with Podman
+
+See https://podman-desktop.io/tutorial/testcontainers-with-podman
+
+On my mac, this means I had to run:
+
+```
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+export TESTCONTAINERS_RYUK_DISABLED=true
+export DOCKER_AUTH_CONFIG="$(cat $HOME/.config/containers/auth.json)"
+```
+
 ## Usage without Home Assistant
 
 If you are not using Home Assistant, you can still subscribe to the MQTT topics directly to get the data from your EZ1 microinverters.
@@ -264,11 +283,11 @@ If you are not using Home Assistant, you can still subscribe to the MQTT topics 
 └── _status
 ```
 
-*   **`<MQTT_BASE_TOPIC>/<device_topic>/info`**: A retained message containing static information about the device.
-*   **`<MQTT_BASE_TOPIC>/<device_topic>/status`**: Publishes the real-time status and sensor readings from the device at the configured polling interval.
-*   **`<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`**: A retained message with the current max power setting.
-*   **`<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`**: The command topic to set the max power of the device. Publish a number (as a string) to this topic.
-*   **`<MQTT_BASE_TOPIC>/_status`**: A topic to monitor the status of the `ez12mqtt` service itself. Publishes `{"online":true, ...}` when running and has a Last Will and Testament to publish `{"online":false}` if it disconnects ungracefully.
+- **`<MQTT_BASE_TOPIC>/<device_topic>/info`**: A retained message containing static information about the device.
+- **`<MQTT_BASE_TOPIC>/<device_topic>/status`**: Publishes the real-time status and sensor readings from the device at the configured polling interval.
+- **`<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W`**: A retained message with the current max power setting.
+- **`<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`**: The command topic to set the max power of the device. Publish a number (as a string) to this topic.
+- **`<MQTT_BASE_TOPIC>/_status`**: A topic to monitor the status of the `ez12mqtt` service itself. Publishes `{"online":true, ...}` when running and has a Last Will and Testament to publish `{"online":false}` if it disconnects ungracefully.
 
 ## Home Assistant Integration
 
@@ -287,9 +306,9 @@ To enable Home Assistant integration, set the following environment variables:
 
 When Home Assistant integration is enabled, a separate availability topic is published for each device:
 
-*   **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/availability`
-*   **Payload (Online):** `1`
-*   **Payload (Offline):** `0`
+- **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/availability`
+- **Payload (Online):** `1`
+- **Payload (Offline):** `0`
 
 This allows Home Assistant to accurately track the online/offline status of each device.
 
@@ -301,49 +320,49 @@ This allows Home Assistant to accurately track the online/offline status of each
 
 Published at startup and when device online/offline status changes.
 
-| Field Name | Type | Description |
-| :--- | :--- | :--- |
-| `observedAt` | `number` | Unix epoch seconds UTC when the data was observed. |
-| `deviceIdentifier` | `string` | The unique identifier of the device. |
-| `deviceVersion` | `string` | The version of the device firmware. |
-| `wifiNetworkSSID` | `string` | The SSID of the Wi-Fi network the device is connected to. |
-| `deviceIPAddress` | `string` | The IP address of the device. |
-| `minimumPowerOutput_W` | `number` | The minimum power output of the device in Watts. |
-| `deviceDescription` | `string` | The user-provided description of the device. |
+| Field Name             | Type     | Description                                               |
+| :--------------------- | :------- | :-------------------------------------------------------- |
+| `observedAt`           | `number` | Unix epoch seconds UTC when the data was observed.        |
+| `deviceIdentifier`     | `string` | The unique identifier of the device.                      |
+| `deviceVersion`        | `string` | The version of the device firmware.                       |
+| `wifiNetworkSSID`      | `string` | The SSID of the Wi-Fi network the device is connected to. |
+| `deviceIPAddress`      | `string` | The IP address of the device.                             |
+| `minimumPowerOutput_W` | `number` | The minimum power output of the device in Watts.          |
+| `deviceDescription`    | `string` | The user-provided description of the device.              |
 
 ### `maxPower_W` Topic Payload
 
-| Field Name | Type | Description |
-| :--- | :--- | :--- |
-| `observedAt` | `number` | Unix epoch seconds UTC when the data was observed. |
-| `maximumPowerOutput_W` | `number` | The maximum power output of the device in Watts. |
+| Field Name             | Type     | Description                                        |
+| :--------------------- | :------- | :------------------------------------------------- |
+| `observedAt`           | `number` | Unix epoch seconds UTC when the data was observed. |
+| `maximumPowerOutput_W` | `number` | The maximum power output of the device in Watts.   |
 
 ### `status` Topic Payload
 
 Published at every poll interval.
 
-| Field Name | Type | Description |
-| :--- | :--- | :--- |
-| `observedAt` | `number` | Unix epoch seconds UTC when the data was observed. |
-| `isOnline` | `boolean` | `true` if the device is online, `false` otherwise. |
-| `deviceLastSeenAt` | `number | null` | Unix timestamp of the last successful poll. `null` if never seen. |
-| `channel1Power_W` | `number | null` | The current power of channel 1 in Watts. `null` if not available. |
-| `channel1EnergySinceStartup_kWh` | `number | null` | The energy generated by channel 1 since startup in kWh. `null` if not available. |
-| `channel1EnergyLifetime_kWh` | `number | null` | The total energy generated by channel 1 in kWh. `null` if not available. |
-| `channel2Power_W` | `number | null` | The current power of channel 2 in Watts. `null` if not available. |
-| `channel2EnergySinceStartup_kWh` | `number | null` | The energy generated by channel 2 since startup in kWh. `null` if not available. |
-| `channel2EnergyLifetime_kWh` | `number | null` | The total energy generated by channel 2 in kWh. `null` if not available. |
-| `totalPower_W` | `number | null` | The total power of both channels in Watts. `null` if not available. |
-| `totalEnergySinceStartup_kWh` | `number | null` | The total energy generated by both channels since startup in kWh. `null` if not available. |
-| `totalEnergyLifetime_kWh` | `number | null` | The total energy generated by both channels in kWh. `null` if not available. |
-| `isOffGrid` | `boolean | null` | `true` if off-grid alarm, `false` if normal, `null` if unknown. |
-| `isOutputFault` | `boolean | null` | `true` if output fault alarm, `false` if normal, `null` if unknown. |
-| `isChannel1ShortCircuit` | `boolean | null` | `true` if DC 1 short circuit alarm, `false` if normal, `null` if unknown. |
-| `isChannel2ShortCircuit` | `boolean | null` | `true` if DC 2 short circuit alarm, `false` if normal, `null` if unknown. |
+| Field Name                       | Type      | Description                                        |
+| :------------------------------- | :-------- | :------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `observedAt`                     | `number`  | Unix epoch seconds UTC when the data was observed. |
+| `isOnline`                       | `boolean` | `true` if the device is online, `false` otherwise. |
+| `deviceLastSeenAt`               | `number   | null`                                              | Unix timestamp of the last successful poll. `null` if never seen.                          |
+| `channel1Power_W`                | `number   | null`                                              | The current power of channel 1 in Watts. `null` if not available.                          |
+| `channel1EnergySinceStartup_kWh` | `number   | null`                                              | The energy generated by channel 1 since startup in kWh. `null` if not available.           |
+| `channel1EnergyLifetime_kWh`     | `number   | null`                                              | The total energy generated by channel 1 in kWh. `null` if not available.                   |
+| `channel2Power_W`                | `number   | null`                                              | The current power of channel 2 in Watts. `null` if not available.                          |
+| `channel2EnergySinceStartup_kWh` | `number   | null`                                              | The energy generated by channel 2 since startup in kWh. `null` if not available.           |
+| `channel2EnergyLifetime_kWh`     | `number   | null`                                              | The total energy generated by channel 2 in kWh. `null` if not available.                   |
+| `totalPower_W`                   | `number   | null`                                              | The total power of both channels in Watts. `null` if not available.                        |
+| `totalEnergySinceStartup_kWh`    | `number   | null`                                              | The total energy generated by both channels since startup in kWh. `null` if not available. |
+| `totalEnergyLifetime_kWh`        | `number   | null`                                              | The total energy generated by both channels in kWh. `null` if not available.               |
+| `isOffGrid`                      | `boolean  | null`                                              | `true` if off-grid alarm, `false` if normal, `null` if unknown.                            |
+| `isOutputFault`                  | `boolean  | null`                                              | `true` if output fault alarm, `false` if normal, `null` if unknown.                        |
+| `isChannel1ShortCircuit`         | `boolean  | null`                                              | `true` if DC 1 short circuit alarm, `false` if normal, `null` if unknown.                  |
+| `isChannel2ShortCircuit`         | `boolean  | null`                                              | `true` if DC 2 short circuit alarm, `false` if normal, `null` if unknown.                  |
 
 ### Command Topics
 
 #### Set Max Power
 
-*   **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`
-*   **Payload:** A number representing the desired max power in Watts.
+- **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`
+- **Payload:** A number representing the desired max power in Watts.

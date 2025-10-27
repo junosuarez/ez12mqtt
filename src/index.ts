@@ -157,8 +157,49 @@ async function pollDevice(deviceState: DeviceState): Promise<void> {
   }
 }
 
+async function restoreState(): Promise<void> {
+  return new Promise((resolve) => {
+    const wildcardTopic = `${config.mqttBaseTopic}/#`;
+    mqttClient.subscribe(wildcardTopic);
+
+    const restoreMessageHandler = (topic: string, message: Buffer) => {
+      const messageString = message.toString();
+      logger.debug(`Restoring state from topic: ${topic}`, { payload: messageString });
+
+      const infoTopicRegex = new RegExp(`^${config.mqttBaseTopic}/(.+)/info$`);
+      const match = topic.match(infoTopicRegex);
+
+      if (match) {
+        const deviceTopic = match[1];
+        const deviceState = deviceStates.find(d => d.mqttTopic === deviceTopic || d.nickname === deviceTopic);
+        if (deviceState) {
+          const payload = JSON.parse(messageString);
+          deviceState.deviceId = payload.deviceIdentifier;
+          deviceState.minPower = payload.minimumPowerOutput_W;
+          if (!deviceState.nickname) {
+            deviceState.mqttTopic = payload.deviceIdentifier;
+          }
+        }
+      }
+    };
+
+    mqttClient.on('message', restoreMessageHandler);
+
+    const restoreTimeout = setTimeout(() => {
+      logger.info('State restoration complete.');
+      mqttClient.removeListener('message', restoreMessageHandler);
+      mqttClient.unsubscribe(wildcardTopic);
+      resolve();
+    }, 2000); // Wait 2 seconds for all retained messages
+  });
+}
+
 async function main(): Promise<void> {
-  mqttClient.connect((topic, message) => {
+  mqttClient.connect();
+
+  await restoreState();
+
+  mqttClient.on('message', (topic, message) => {
     const messageString = message.toString();
     logger.debug(`Received message on topic: ${topic}`, { payload: messageString });
 
@@ -191,6 +232,10 @@ async function main(): Promise<void> {
 
   // Initial poll for all devices
   for (const deviceState of deviceStates) {
+    if (config.homeAssistantEnable && !deviceState.discoveryPublished) {
+      publishDiscoveryMessages(deviceState, mqttClient);
+      deviceState.discoveryPublished = true;
+    }
     await pollDevice(deviceState);
     if (config.homeAssistantEnable) {
       mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);

@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node src/index.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
+    "test:e2e": "export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock;export TESTCONTAINERS_RYUK_DISABLED=true;export DOCKER_AUTH_CONFIG=\"$(cat $HOME/.config/containers/auth.json)\" && node tests/e2e.ts",
     "build:container:app": "podman build -f Dockerfile -t ez12mqtt:latest . && podman push localhost/ez12mqtt:latest ghcr.io/junosuarez/ez12mqtt:latest",
     "build:container:mock": "podman build -f Dockerfile.mock -t ez12mqtt:latest-mock . && podman push localhost/ez12mqtt:latest-mock ghcr.io/junosuarez/ez12mqtt:latest-mock",
     "build:container": "npm run build:container:app && npm run build:container:mock"
@@ -23,5 +24,8 @@
     "dotenv": "^17.2.3",
     "mqtt": "^5.14.1",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "testcontainers": "^11.7.2"
   }
 }

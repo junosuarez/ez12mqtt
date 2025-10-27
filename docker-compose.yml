@@ -49,26 +49,7 @@ services:
       - mock-ez1
     restart: unless-stopped
 
-  mqtt-tester:
-    build:
-      context: .
-      dockerfile: Dockerfile.tester
-    container_name: mqtt-tester
-    environment:
-      - MQTT_HOST=mqtt-broker
-      - MQTT_PORT=1883
-      - MQTT_BASE_TOPIC=ez12mqtt_test
-      - POLL_INTERVAL=5
-      - LOG_LEVEL=DEBUG
-      - DEVICE_1_IP=mock-ez1
-      - DEVICE_1_NICKNAME=mock_inverter
-      - DEVICE_1_DESCRIPTION="My Mock Inverter"
-      - HOMEASSISTANT_ENABLE=true
-    depends_on:
-      - mock-ez1
-      - mqtt-broker
-      - ez12mqtt
-    restart: "no"
+
 
 volumes:
   mosquitto_data:

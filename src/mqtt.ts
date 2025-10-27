@@ -26,7 +26,7 @@ export class MQTTClient {
     };
   }
 
-  public connect(messageHandler: (topic: string, message: Buffer) => void): void {
+  public connect(): void {
     logger.info(`Attempting to connect to MQTT broker at ${this.mqttUrl}`);
     this.client = mqtt.connect(this.mqttUrl, this.options);
 
@@ -34,8 +34,6 @@ export class MQTTClient {
       logger.info('Successfully connected to MQTT broker.');
       this.startHeartbeat();
     });
-
-    this.client.on('message', messageHandler);
 
     this.client.on('error', (error) => {
       logger.error(`MQTT connection error: ${error.message}`);
@@ -51,6 +49,14 @@ export class MQTTClient {
     });
   }
 
+  public on(event: string, listener: (...args: any[]) => void): void {
+    this.client?.on(event, listener);
+  }
+
+  public removeListener(event: string, listener: (...args: any[]) => void): void {
+    this.client?.removeListener(event, listener);
+  }
+
   public subscribe(topic: string): void {
     if (!this.client || !this.client.connected) {
       logger.warn(`MQTT client not connected. Cannot subscribe to topic: ${topic}`);
@@ -64,6 +70,19 @@ export class MQTTClient {
         if (config.logLevel === 'DEBUG') {
           logger.debug(`Subscribed to topic: ${topic}`);
         }
+      }
+    });
+  }
+
+  public unsubscribe(topic: string): void {
+    if (!this.client || !this.client.connected) {
+      logger.warn(`MQTT client not connected. Cannot unsubscribe from topic: ${topic}`);
+      return;
+    }
+
+    this.client.unsubscribe(topic, (error) => {
+      if (error) {
+        logger.error(`Failed to unsubscribe from topic ${topic}: ${error.message}`);
       }
     });
   }
