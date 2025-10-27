@@ -45,6 +45,7 @@ async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
     }
 
     deviceState.minPower = parseFloat(deviceInfo.minPower);
+    deviceState.maxPower = parseFloat(deviceInfo.maxPower);
 
     const payload = {
       observedAt: Math.floor(Date.now() / 1000),
@@ -53,6 +54,7 @@ async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
       wifiNetworkSSID: deviceInfo.ssid,
       deviceIPAddress: deviceInfo.ipAddr,
       minimumPowerOutput_W: deviceState.minPower,
+      maximumPowerOutput_W: deviceState.maxPower,
       deviceDescription: deviceState.description,
     };
     mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/info`, payload, true);
@@ -76,7 +78,20 @@ async function fetchAndPublishMaxPower(deviceState: DeviceState): Promise<void> 
   }
 }
 
-async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
+async function publishEnergyTopic(deviceState: DeviceState, outputData: any): Promise<void> {
+  if (outputData) {
+    const payload = {
+      observedAt: Math.floor(Date.now() / 1000),
+      channel1EnergyLifetime_kWh: outputData.te1,
+      channel2EnergyLifetime_kWh: outputData.te2,
+      totalEnergyLifetime_kWh: outputData.te1 + outputData.te2,
+    };
+    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/energy_kWh`, payload, true);
+    logger.debug(`Published energy_kWh topic for ${deviceState.mqttTopic}`, { payload });
+  }
+}
+
+async function fetchAndPublishStatus(deviceState: DeviceState): Promise<any> {
   const api = new EZ1API(deviceState.ip);
   const outputData = await api.getOutputData();
   const alarmInfo = await api.getAlarm();
@@ -101,23 +116,17 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
   if (outputData) {
     payload.channel1Power_W = outputData.p1;
     payload.channel1EnergySinceStartup_kWh = outputData.e1;
-    payload.channel1EnergyLifetime_kWh = outputData.te1;
     payload.channel2Power_W = outputData.p2;
     payload.channel2EnergySinceStartup_kWh = outputData.e2;
-    payload.channel2EnergyLifetime_kWh = outputData.te2;
     payload.totalPower_W = outputData.p1 + outputData.p2;
     payload.totalEnergySinceStartup_kWh = outputData.e1 + outputData.e2;
-    payload.totalEnergyLifetime_kWh = outputData.te1 + outputData.te2;
   } else {
     payload.channel1Power_W = null;
     payload.channel1EnergySinceStartup_kWh = null;
-    payload.channel1EnergyLifetime_kWh = null;
     payload.channel2Power_W = null;
     payload.channel2EnergySinceStartup_kWh = null;
-    payload.channel2EnergyLifetime_kWh = null;
     payload.totalPower_W = null;
     payload.totalEnergySinceStartup_kWh = null;
-    payload.totalEnergyLifetime_kWh = null;
   }
 
   if (alarmInfo) {
@@ -133,14 +142,17 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<void> {
   }
 
   mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/status`, payload);
+  return outputData;
 }
 
 async function pollDevice(deviceState: DeviceState): Promise<void> {
   logger.debug(`Polling device: ${deviceState.ip}`);
 
   const wasOnline = deviceState.isOnline;
-  await fetchAndPublishStatus(deviceState);
+  const outputData = await fetchAndPublishStatus(deviceState);
+
   if (deviceState.isOnline) {
+    await publishEnergyTopic(deviceState, outputData);
     await fetchAndPublishMaxPower(deviceState);
   }
 
@@ -176,6 +188,7 @@ async function restoreState(): Promise<void> {
           const payload = JSON.parse(messageString);
           deviceState.deviceId = payload.deviceIdentifier;
           deviceState.minPower = payload.minimumPowerOutput_W;
+          deviceState.maxPower = payload.maximumPowerOutput_W;
           if (!deviceState.nickname) {
             deviceState.mqttTopic = payload.deviceIdentifier;
           }
@@ -195,7 +208,7 @@ async function restoreState(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  mqttClient.connect();
+  await mqttClient.connect();
 
   await restoreState();
 
@@ -232,7 +245,7 @@ async function main(): Promise<void> {
 
   // Initial poll for all devices
   for (const deviceState of deviceStates) {
-    if (config.homeAssistantEnable && !deviceState.discoveryPublished) {
+    if (config.homeAssistantEnable && !deviceState.discoveryPublished && deviceState.deviceId) {
       publishDiscoveryMessages(deviceState, mqttClient);
       deviceState.discoveryPublished = true;
     }

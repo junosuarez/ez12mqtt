@@ -26,26 +26,29 @@ export class MQTTClient {
     };
   }
 
-  public connect(): void {
-    logger.info(`Attempting to connect to MQTT broker at ${this.mqttUrl}`);
-    this.client = mqtt.connect(this.mqttUrl, this.options);
+  public connect(): Promise<void> {
+    return new Promise((resolve) => {
+      logger.info(`Attempting to connect to MQTT broker at ${this.mqttUrl}`);
+      this.client = mqtt.connect(this.mqttUrl, this.options);
 
-    this.client.on('connect', () => {
-      logger.info('Successfully connected to MQTT broker.');
-      this.startHeartbeat();
-    });
+      this.client.on('connect', () => {
+        logger.info('Successfully connected to MQTT broker.');
+        this.startHeartbeat();
+        resolve();
+      });
 
-    this.client.on('error', (error) => {
-      logger.error(`MQTT connection error: ${error.message}`);
-      this.client?.end(); // Close client on error to trigger reconnect
-    });
+      this.client.on('error', (error) => {
+        logger.error(`MQTT connection error: ${error.message}`);
+        this.client?.end(); // Close client on error to trigger reconnect
+      });
 
-    this.client.on('reconnect', () => {
-      logger.info('Reconnecting to MQTT broker...');
-    });
+      this.client.on('reconnect', () => {
+        logger.info('Reconnecting to MQTT broker...');
+      });
 
-    this.client.on('close', () => {
-      logger.warn('MQTT connection closed.');
+      this.client.on('close', () => {
+        logger.warn('MQTT connection closed.');
+      });
     });
   }
 
