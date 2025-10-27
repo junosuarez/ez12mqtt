@@ -86,8 +86,8 @@ async function publishEnergyTopic(deviceState: DeviceState, outputData: any): Pr
       channel2EnergyLifetime_kWh: outputData.te2,
       totalEnergyLifetime_kWh: outputData.te1 + outputData.te2,
     };
-    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/energy_kWh`, payload, true);
-    logger.debug(`Published energy_kWh topic for ${deviceState.mqttTopic}`, { payload });
+    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/energy`, payload, true);
+    logger.debug(`Published energy topic for ${deviceState.mqttTopic}`, { payload });
   }
 }
 

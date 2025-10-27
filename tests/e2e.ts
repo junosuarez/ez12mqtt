@@ -75,7 +75,7 @@ async function runTest(options: TestOptions) {
     const offlineAvailabilityTopic = `${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/availability`;
     setupClient.publish(offlineAvailabilityTopic, '0', { retain: true });
 
-    const offlineEnergyTopic = `${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy_kWh`;
+    const offlineEnergyTopic = `${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy`;
     const offlineEnergyPayload = {
       observedAt: Math.floor(Date.now() / 1000) - 3600,
       channel1EnergyLifetime_kWh: 123,
@@ -204,10 +204,10 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
               }
             }
 
-            const energyTopic = `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/energy_kWh`;
+            const energyTopic = `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/energy`;
             const topicsToSubscribe = [...stateTopics, ...availabilityTopics, `${MQTT_BASE_TOPIC}/_status`, energyTopic];
             if (options.expectOfflineDevice) {
-              topicsToSubscribe.push(`${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy_kWh`);
+              topicsToSubscribe.push(`${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy`);
             }
             client.subscribe(topicsToSubscribe, (err) => {
               if (err) fail(`Failed to subscribe to operational topics: ${err.message}`);
@@ -227,7 +227,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
         }
       }
 
-      if (topic === `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/energy_kWh`) {
+      if (topic === `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/energy`) {
         if (payload.totalEnergyLifetime_kWh === payload.channel1EnergyLifetime_kWh + payload.channel2EnergyLifetime_kWh) {
           if (pendingAssertions.has('energyTopicReceived')) {
             pass('Energy topic received and validated.');
@@ -252,7 +252,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
           }
         }
 
-        if (topic === `${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy_kWh`) {
+        if (topic === `${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy`) {
           if (payload.totalEnergyLifetime_kWh === 579) {
             if (pendingAssertions.has('device2EnergyRestored')) {
               pass('Device 2 restored energy topic from retained message.');
