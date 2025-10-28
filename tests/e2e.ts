@@ -197,6 +197,21 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
 
       if (topic.startsWith(HOMEASSISTANT_DISCOVERY_PREFIX)) {
         if (pendingAssertions.has('discoveryComplete')) {
+          if (!payload.unique_id || !payload.name || !payload.device || !payload.device.identifiers) {
+            fail(`Invalid discovery payload for topic ${topic}: Missing required fields.`);
+          }
+  
+          const isLifetimeEnergy = topic.includes('EnergyLifetime');
+          if (isLifetimeEnergy) {
+            if (payload.availability_topic) {
+              fail(`Discovery payload for ${topic} should not have availability_topic`);
+            }
+          } else {
+            if (!payload.availability_topic) {
+              fail(`Discovery payload for ${topic} is missing availability_topic`);
+            }
+          }
+
           discoveryMessages.set(topic, payload);
           logger.debug(`Discovery messages received: ${discoveryMessages.size}/${options.expectedDiscoveryMessages}`);
 
