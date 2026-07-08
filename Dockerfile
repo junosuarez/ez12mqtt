@@ -1,22 +1,21 @@
-# Use an official Node.js runtime as a parent image
-FROM node:24-alpine
-
-# Set the working directory in the container
+# ---- build: install production dependencies from the lockfile ----
+FROM node:24-alpine AS build
 WORKDIR /app
-
-# Copy package.json and package-lock.json to the working directory
 COPY package*.json ./
-
-# Install production dependencies only — deterministic (from the lockfile) and no
-# devDependencies (testcontainers & its transitive protobufjs/grpc/dockerode don't
-# belong in the runtime image: smaller + smaller CVE surface).
+# Production deps only — deterministic (from the lockfile) and no devDependencies
+# (testcontainers & its transitive protobufjs/grpc/dockerode don't belong in the
+# runtime image: smaller + smaller CVE surface).
 RUN npm ci --omit=dev
 
-# Copy the rest of the application code
+# ---- prod: clean base, no npm, only installed deps + source ----
+FROM node:24-alpine AS prod
+# The runtime only runs `node src/index.ts` (Node's native TS type-stripping); strip
+# the npm CLI so its bundled transitive deps (undici, …) don't show up in image scans.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
 COPY src ./src
 
-# Expose the port the app runs on (if any, though this app is outbound only)
-# EXPOSE 8050
-
-# Command to run the application
+# Command to run the application (outbound only — no port exposed)
 CMD ["node", "src/index.ts"]
