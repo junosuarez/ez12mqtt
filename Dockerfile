@@ -7,8 +7,10 @@ WORKDIR /app
 # Copy package.json and package-lock.json to the working directory
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install production dependencies only — deterministic (from the lockfile) and no
+# devDependencies (testcontainers & its transitive protobufjs/grpc/dockerode don't
+# belong in the runtime image: smaller + smaller CVE surface).
+RUN npm ci --omit=dev
 
 # Copy the rest of the application code
 COPY src ./src
