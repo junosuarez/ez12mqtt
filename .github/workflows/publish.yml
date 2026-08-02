@@ -29,6 +29,9 @@ jobs:
       - run: npm test
 
   publish:
+    # On a PR this job builds but pushes nothing. Naming it "publish" regardless made a green
+    # check on an open PR look like it had already published.
+    name: ${{ github.event_name == 'pull_request' && 'build image (no push)' || 'publish image' }}
     needs: test
     runs-on: ubuntu-latest
     permissions:
