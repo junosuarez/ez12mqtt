@@ -1,6 +1,10 @@
 # Use an official Node.js runtime as a parent image
 FROM node:26-alpine
 
+LABEL org.opencontainers.image.source="https://github.com/junosuarez/ez12mqtt"
+LABEL org.opencontainers.image.description="Mock APsystems EZ1 device server, for ez12mqtt's e2e tests"
+LABEL org.opencontainers.image.licenses="ISC"
+
 # Set the working directory in the container
 WORKDIR /app
 
