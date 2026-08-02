@@ -3,13 +3,8 @@ import { logger } from './logger.ts';
 import { MQTTClient } from './mqtt.ts';
 import type { DeviceState } from './index.ts';
 
-// Home Assistant MQTT discovery definitions, one per published field.
-//
-// The shape is declared explicitly rather than inferred: these entries are deliberately
-// heterogeneous (only some carry a unit, a state_class, a value_template…), and inferring a
-// union from the object literal makes each optional property inaccessible on the members
-// that lack it. TypeScript 7's stricter inference rejects that outright where 5.x let it
-// pass. Declaring the optionals also removes the need for the `as any` escapes below.
+// Declared rather than inferred: the entries are heterogeneous, and a union inferred from
+// the literal makes each optional property inaccessible on the members lacking it.
 interface ComponentDef {
   name: string;
   type: 'sensor' | 'binary_sensor' | 'number';

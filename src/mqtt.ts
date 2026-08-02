@@ -52,10 +52,8 @@ export class MQTTClient {
     });
   }
 
-  // mqtt v5 types its emitter against a fixed event map, so a bare `string` no longer
-  // satisfies `on`/`removeListener` under TypeScript 7. Deriving the parameter from the
-  // client's own event map keeps these thin wrappers honest — and now a typo in an event
-  // name is a compile error rather than a listener that silently never fires.
+  // Derived from the client's own event map: mqtt v5 types its emitter against a fixed set,
+  // so a typo'd event name is a compile error rather than a listener that never fires.
   public on<E extends Parameters<MqttClient['on']>[0]>(
     event: E,
     listener: (...args: any[]) => void,

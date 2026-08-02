@@ -19,6 +19,12 @@ interface TestOptions {
   prePopulate: boolean;
   expectedDiscoveryMessages: number;
   expectOfflineDevice: boolean;
+  // Sun scenarios pin "now" via SUN_NOW_OVERRIDE at Null Island, so day and night are fixed
+  // facts rather than whenever the suite happens to run.
+  sunNow?: string;
+  expectPollSkipped?: boolean;
+  // A sleeping inverter never comes online, so the online-path assertions cannot apply.
+  onlySunAssertions?: boolean;
 }
 
 async function runTest(options: TestOptions, logOnPass: boolean) {
@@ -107,6 +113,11 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
       LOG_LEVEL: 'DEBUG',
       MQTT_BASE_TOPIC: MQTT_BASE_TOPIC,
       POLL_INTERVAL: '2',
+      ...(options.sunNow && {
+        LATITUDE: '0',
+        LONGITUDE: '0',
+        SUN_NOW_OVERRIDE: options.sunNow,
+      }),
     })
     .start();
 
@@ -136,15 +147,23 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
 
 function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContainer: StartedTestContainer): Promise<void> {
   return new Promise((resolve, reject) => {
-    const pendingAssertions = new Set([
-      'discoveryComplete',
-      'ez12mqttOnline',
-      'deviceAvailabilityReceived',
-      'deviceStatusOnline',
-      'deviceStatusUpdated',
-      'maxPowerControlVerified',
-      'energyTopicReceived',
-    ]);
+    const pendingAssertions = new Set(
+      options.onlySunAssertions
+        ? ['ez12mqttOnline']
+        : [
+            'discoveryComplete',
+            'ez12mqttOnline',
+            'deviceAvailabilityReceived',
+            'deviceStatusOnline',
+            'deviceStatusUpdated',
+            'maxPowerControlVerified',
+            'energyTopicReceived',
+          ],
+    );
+
+    if (options.sunNow) {
+      pendingAssertions.add('sunFieldsPublished');
+    }
 
     if (options.expectOfflineDevice) {
       pendingAssertions.add('device2Offline');
@@ -182,6 +201,16 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
       if (err) fail(`Failed to subscribe to discovery topic: ${err.message}`);
       logger.info('Subscribed to discovery topic:', { topic: discoveryWildcard });
     });
+
+    if (options.onlySunAssertions) {
+      // No device ever comes online here, so discovery never fires and the usual
+      // subscribe-after-discovery path below never runs.
+      const wildcard = `${MQTT_BASE_TOPIC}/#`;
+      client.subscribe(wildcard, (err) => {
+        if (err) fail(`Failed to subscribe to ${wildcard}: ${err.message}`);
+        logger.info('Subscribed to base topic:', { topic: wildcard });
+      });
+    }
 
     let discoveryMessages = new Map<string, any>();
     let stateTopics = new Set<string>();
@@ -238,6 +267,31 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
               logger.info('Subscribed to operational topics:', { topics: topicsToSubscribe });
             });
           }
+        }
+      }
+
+      if (
+        pendingAssertions.has('sunFieldsPublished') &&
+        topic === `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/status`
+      ) {
+        const missing = ['sunAzimuth_deg', 'sunElevation_deg', 'isSunUp', 'sunriseAt', 'sunsetAt', 'isPollSkipped']
+          .filter(k => !(k in payload));
+        if (missing.length) {
+          fail(`Status payload is missing sun fields: ${missing.join(', ')}`);
+        } else if (payload.sunAzimuth_deg < 0 || payload.sunAzimuth_deg >= 360) {
+          fail(`sunAzimuth_deg out of range: ${payload.sunAzimuth_deg}`);
+        } else if (payload.sunElevation_deg < -90 || payload.sunElevation_deg > 90) {
+          fail(`sunElevation_deg out of range: ${payload.sunElevation_deg}`);
+        } else if (payload.isPollSkipped !== options.expectPollSkipped) {
+          fail(`Expected isPollSkipped=${options.expectPollSkipped}, got ${payload.isPollSkipped}`);
+        } else if (payload.isSunUp === options.expectPollSkipped) {
+          fail(`isSunUp (${payload.isSunUp}) contradicts isPollSkipped (${payload.isPollSkipped})`);
+        } else if (options.expectPollSkipped && payload.totalPower_W !== null) {
+          fail(`Poll was skipped but power was reported: ${payload.totalPower_W}`);
+        } else {
+          pass(`Sun fields published (isSunUp=${payload.isSunUp}, isPollSkipped=${payload.isPollSkipped}).`);
+          pendingAssertions.delete('sunFieldsPublished');
+          checkAllAssertionsPassed();
         }
       }
 
@@ -358,6 +412,20 @@ async function main() {
       prePopulate: false,
       expectedDiscoveryMessages: 14,
       expectOfflineDevice: false,
+      // Local noon at Null Island: sun up, so this is normal operation plus proof the sun
+      // fields ride along without disturbing it.
+      sunNow: '2026-06-21T12:00:00Z',
+      expectPollSkipped: false,
+    }, logOnPass);
+    await runTest({
+      testName: 'Sun Down (polling skipped)',
+      prePopulate: false,
+      expectedDiscoveryMessages: 0,
+      expectOfflineDevice: false,
+      // Local midnight at Null Island.
+      sunNow: '2026-06-21T00:00:00Z',
+      expectPollSkipped: true,
+      onlySunAssertions: true,
     }, logOnPass);
   } catch (e) {
     logger.error('A test failed, exiting.');

@@ -17,6 +17,17 @@ interface Config {
   logLevel: 'INFO' | 'DEBUG';
   homeAssistantEnable: boolean;
   homeAssistantDiscoveryPrefix: string;
+  /** Both required to enable the sun features; unset means poll around the clock. */
+  latitude?: number;
+  longitude?: number;
+  /**
+   * Elevation (deg) at or below which polling is skipped. Defaults to -6 (civil twilight)
+   * not 0: skipping a poll while it's still producing loses data, polling a sleeping
+   * inverter costs one timeout — so it errs toward polling.
+   */
+  sunElevationThreshold: number;
+  /** Test-only: pins "now" for solar position so e2e can assert on a fixed day or night. */
+  sunNowOverride?: Date;
 }
 
 function validateConfig(config: Partial<Config>): Config {
@@ -74,6 +85,44 @@ function parseDevices(): DeviceConfig[] {
   return devices;
 }
 
+/** Both or neither: a half-set location would silently compute the wrong solar position. */
+function parseLocation(): { latitude?: number; longitude?: number } {
+  const rawLat = process.env.LATITUDE;
+  const rawLon = process.env.LONGITUDE;
+  if (!rawLat && !rawLon) return {};
+
+  if (!rawLat || !rawLon) {
+    logger.warn('Only one of LATITUDE/LONGITUDE is set — both are required. Sun features disabled.');
+    return {};
+  }
+
+  const latitude = parseFloat(rawLat);
+  const longitude = parseFloat(rawLon);
+  if (isNaN(latitude) || latitude < -90 || latitude > 90) {
+    logger.warn(`LATITUDE ${rawLat} is not a number in [-90, 90]. Sun features disabled.`);
+    return {};
+  }
+  if (isNaN(longitude) || longitude < -180 || longitude > 180) {
+    logger.warn(`LONGITUDE ${rawLon} is not a number in [-180, 180]. Sun features disabled.`);
+    return {};
+  }
+  return { latitude, longitude };
+}
+
+function parseSunNowOverride(): Date | undefined {
+  const raw = process.env.SUN_NOW_OVERRIDE;
+  if (!raw) return undefined;
+
+  const date = new Date(raw);
+  if (isNaN(date.getTime())) {
+    logger.error(`SUN_NOW_OVERRIDE ${raw} is not a valid date. Ignoring.`);
+    return undefined;
+  }
+  // Loud on purpose: this freezes the sun and must never go unnoticed outside a test.
+  logger.warn(`SUN_NOW_OVERRIDE is set — solar position is pinned to ${date.toISOString()}. Test use only.`);
+  return date;
+}
+
 const rawLogLevel = process.env.LOG_LEVEL?.toUpperCase();
 const logLevel: 'INFO' | 'DEBUG' = (rawLogLevel === 'DEBUG' ? 'DEBUG' : 'INFO');
 setLogLevel(logLevel);
@@ -89,6 +138,9 @@ const config: Config = validateConfig({
   logLevel: logLevel,
   homeAssistantEnable: process.env.HOMEASSISTANT_ENABLE === 'true',
   homeAssistantDiscoveryPrefix: process.env.HOMEASSISTANT_DISCOVERY_PREFIX || 'homeassistant',
+  ...parseLocation(),
+  sunElevationThreshold: parseFloat(process.env.SUN_ELEVATION_THRESHOLD || '-6'),
+  sunNowOverride: parseSunNowOverride(),
 });
 
 export default config;
