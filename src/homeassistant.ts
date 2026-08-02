@@ -3,7 +3,25 @@ import { logger } from './logger.ts';
 import { MQTTClient } from './mqtt.ts';
 import type { DeviceState } from './index.ts';
 
-const components = {
+// Home Assistant MQTT discovery definitions, one per published field.
+//
+// The shape is declared explicitly rather than inferred: these entries are deliberately
+// heterogeneous (only some carry a unit, a state_class, a value_template…), and inferring a
+// union from the object literal makes each optional property inaccessible on the members
+// that lack it. TypeScript 7's stricter inference rejects that outright where 5.x let it
+// pass. Declaring the optionals also removes the need for the `as any` escapes below.
+interface ComponentDef {
+  name: string;
+  type: 'sensor' | 'binary_sensor' | 'number';
+  device_class: string;
+  state_class?: string;
+  unit?: string;
+  subtopic?: string;
+  value_template?: string;
+  mode?: string;
+}
+
+const components: Record<string, ComponentDef> = {
   channel1Power_W: { name: 'Channel 1 Power', type: 'sensor', device_class: 'power', state_class: 'measurement', unit: 'W' },
   channel1EnergySinceStartup_kWh: { name: 'Channel 1 Energy Since Startup', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
   channel1EnergyLifetime_kWh: { name: 'Channel 1 Energy Lifetime', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh', subtopic: 'energy', value_template: '{{ value_json.channel1EnergyLifetime_kWh }}' },
@@ -45,13 +63,13 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       device: device,
     };
 
-    if ((component as any).subtopic !== 'energy') {
+    if (component.subtopic !== 'energy') {
       payload.availability_topic = availabilityTopic;
       payload.payload_available = '1';
       payload.payload_not_available = '0';
     }
 
-    const subtopic = (component as any).subtopic || 'status';
+    const subtopic = component.subtopic || 'status';
     if (component.type !== 'number') {
       payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/${subtopic}`;
     }
