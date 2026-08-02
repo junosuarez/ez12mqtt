@@ -68,6 +68,9 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
+          # The base is a floating tag so rebuilds pick up its security patches — but the
+          # layer cache would happily reuse a stale base and quietly defeat that.
+          pull: true
           # PRs build to prove the Dockerfile still works, but publish nothing.
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
