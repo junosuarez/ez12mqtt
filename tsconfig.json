@@ -1,8 +1,12 @@
 {
   "compilerOptions": {
     "target": "es2022",
-    "module": "es2022",
-    "moduleResolution": "node",
+    // TypeScript 7 removed the legacy "node"/"node10" resolver. This project is ESM and runs
+    // straight off .ts via Node's type stripping (`node src/index.ts`), so nodenext is the
+    // resolver that matches how the code is actually loaded — and it wants the explicit .ts
+    // extensions the imports already use.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

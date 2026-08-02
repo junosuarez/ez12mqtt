@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "description": "",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "main": "dist/index.js",
   "scripts": {
     "start": "node src/index.ts",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/*.test.ts",
     "test:e2e": "export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock;export TESTCONTAINERS_RYUK_DISABLED=true;export DOCKER_AUTH_CONFIG=\"$(cat $HOME/.config/containers/auth.json)\" && node tests/e2e.ts",
     "build:container:app": "podman build -f Dockerfile -t ez12mqtt:latest . && podman push localhost/ez12mqtt:latest ghcr.io/junosuarez/ez12mqtt:latest",
     "build:container:mock": "podman build -f Dockerfile.mock -t ez12mqtt:latest-mock . && podman push localhost/ez12mqtt:latest-mock ghcr.io/junosuarez/ez12mqtt:latest-mock",
@@ -19,13 +19,14 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "axios": "^1.18.1",
-    "dotenv": "^17.2.3",
-    "mqtt": "^5.15.2"
+    "axios": "^1.19.0",
+    "dotenv": "^17.4.2",
+    "mqtt": "^5.15.2",
+    "suncalc": "^2.0.1"
   },
   "devDependencies": {
-    "@types/node": "^24.9.1",
-    "testcontainers": "^11.7.2",
-    "typescript": "^5.9.3"
+    "@types/node": "^26.1.2",
+    "testcontainers": "^12.0.4",
+    "typescript": "^7.0.2"
   }
 }

@@ -52,12 +52,20 @@ export class MQTTClient {
     });
   }
 
-  public on(event: string, listener: (...args: any[]) => void): void {
-    this.client?.on(event, listener);
+  // Derived from the client's own event map: mqtt v5 types its emitter against a fixed set,
+  // so a typo'd event name is a compile error rather than a listener that never fires.
+  public on<E extends Parameters<MqttClient['on']>[0]>(
+    event: E,
+    listener: (...args: any[]) => void,
+  ): void {
+    this.client?.on(event, listener as any);
   }
 
-  public removeListener(event: string, listener: (...args: any[]) => void): void {
-    this.client?.removeListener(event, listener);
+  public removeListener<E extends Parameters<MqttClient['removeListener']>[0]>(
+    event: E,
+    listener: (...args: any[]) => void,
+  ): void {
+    this.client?.removeListener(event, listener as any);
   }
 
   public subscribe(topic: string): void {

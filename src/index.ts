@@ -4,6 +4,13 @@ import { EZ1API } from './api.ts';
 import { MQTTClient } from './mqtt.ts';
 
 import { publishDiscoveryMessages } from './homeassistant.ts';
+import { getSunState, type SunState } from './sun.ts';
+
+/** Null when no location is configured; the app then polls around the clock as before. */
+function currentSun(): SunState | null {
+  if (config.latitude === undefined || config.longitude === undefined) return null;
+  return getSunState(config.latitude, config.longitude, config.sunElevationThreshold, config.sunNowOverride);
+}
 
 export interface DeviceState {
   ip: string;
@@ -91,10 +98,18 @@ async function publishEnergyTopic(deviceState: DeviceState, outputData: any): Pr
   }
 }
 
-async function fetchAndPublishStatus(deviceState: DeviceState): Promise<any> {
-  const api = new EZ1API(deviceState.ip);
-  const outputData = await api.getOutputData();
-  const alarmInfo = await api.getAlarm();
+async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | null): Promise<any> {
+  // The EZ1 is powered from its own PV input, so after dark it is off, not idle — polling
+  // it then just buys two timeouts and a nightly false "outage".
+  const asleep = sun !== null && !sun.isSunUp;
+
+  let outputData: any = null;
+  let alarmInfo: any = null;
+  if (!asleep) {
+    const api = new EZ1API(deviceState.ip);
+    outputData = await api.getOutputData();
+    alarmInfo = await api.getAlarm();
+  }
 
   const wasOnline = deviceState.isOnline;
   deviceState.isOnline = !!outputData;
@@ -112,6 +127,16 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<any> {
     isOnline: deviceState.isOnline,
     deviceLastSeenAt: deviceState.lastSeenAt,
   };
+
+  if (sun) {
+    payload.sunAzimuth_deg = sun.sunAzimuth_deg;
+    payload.sunElevation_deg = sun.sunElevation_deg;
+    payload.isSunUp = sun.isSunUp;
+    payload.sunriseAt = sun.sunriseAt;
+    payload.sunsetAt = sun.sunsetAt;
+    // Distinguishes "asked and got nothing" from "didn't ask".
+    payload.isPollSkipped = asleep;
+  }
 
   if (outputData) {
     payload.channel1Power_W = outputData.p1;
@@ -145,11 +170,17 @@ async function fetchAndPublishStatus(deviceState: DeviceState): Promise<any> {
   return outputData;
 }
 
-async function pollDevice(deviceState: DeviceState): Promise<void> {
-  logger.debug(`Polling device: ${deviceState.ip}`);
+async function pollDevice(deviceState: DeviceState, sun: SunState | null = currentSun()): Promise<void> {
+  if (sun && !sun.isSunUp) {
+    logger.debug(
+      `Sun is down (elevation ${sun.sunElevation_deg}° <= ${config.sunElevationThreshold}°) — skipping poll of ${deviceState.ip}`,
+    );
+  } else {
+    logger.debug(`Polling device: ${deviceState.ip}`);
+  }
 
   const wasOnline = deviceState.isOnline;
-  const outputData = await fetchAndPublishStatus(deviceState);
+  const outputData = await fetchAndPublishStatus(deviceState, sun);
 
   if (deviceState.isOnline) {
     await publishEnergyTopic(deviceState, outputData);
@@ -165,7 +196,12 @@ async function pollDevice(deviceState: DeviceState): Promise<void> {
       deviceState.discoveryPublished = true;
     }
   } else if (!deviceState.isOnline && wasOnline) {
-    logger.warn(`Device ${deviceState.ip} went offline.`);
+    // Going offline at dusk is expected; warning nightly trains you to ignore the warning.
+    if (sun && !sun.isSunUp) {
+      logger.info(`Device ${deviceState.ip} is asleep for the night (sun below horizon).`);
+    } else {
+      logger.warn(`Device ${deviceState.ip} went offline.`);
+    }
   }
 }
 
@@ -257,8 +293,9 @@ async function main(): Promise<void> {
 
   // Set up polling interval
   setInterval(async () => {
+    const sun = currentSun();
     for (const deviceState of deviceStates) {
-      await pollDevice(deviceState);
+      await pollDevice(deviceState, sun);
     }
   }, config.pollInterval * 1000);
 }

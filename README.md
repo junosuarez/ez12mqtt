@@ -112,6 +112,30 @@ services:
 | `MQTT_BASE_TOPIC`        | The base topic for all MQTT messages.                                                        | `ez12mqtt`  |
 | `POLL_INTERVAL`          | The interval in seconds to poll the fast-changing device data (`getOutputData`, `getAlarm`). | `30`        |
 | `LOG_LEVEL`              | The log level for the application. Can be `INFO` or `DEBUG`.                                 | `INFO`      |
+| `LATITUDE`               | Latitude for solar position. Enables the sun features (with `LONGITUDE`).                    |             |
+| `LONGITUDE`              | Longitude for solar position. Enables the sun features (with `LATITUDE`).                    |             |
+| `SUN_ELEVATION_THRESHOLD`| Sun elevation (deg) at or below which polling is skipped.                                    | `-6`        |
+
+### Solar position
+
+Set `LATITUDE` and `LONGITUDE` to enable two behaviours:
+
+- **Night-time polling is skipped.** The EZ1 is powered from its own PV input, so after dark
+  it is off rather than idle — polling it then only produces timeouts and a nightly false
+  "device offline". The cutoff is `SUN_ELEVATION_THRESHOLD`, defaulting to `-6` (civil
+  twilight) rather than `0`, since skipping a poll while the inverter is still producing
+  loses data while polling a sleeping one costs a timeout.
+- **Sun position is published** on the `status` topic every cycle, day and night:
+  `sunAzimuth_deg` (clockwise from true north), `sunElevation_deg` (above the horizon),
+  `isSunUp`, `sunriseAt`/`sunsetAt` (unix seconds), and `isPollSkipped` — which distinguishes
+  "asked and got nothing" from "deliberately didn't ask". The names match Home Assistant's
+  built-in `sun.sun` entity.
+
+With either coordinate unset, the app polls around the clock and publishes no sun fields.
+City-level precision is plenty — a few km moves sunrise by seconds.
+
+`SUN_NOW_OVERRIDE` (an ISO timestamp) pins "now" for solar position so the e2e suite can
+assert on a fixed day or night. It is test-only, and logs a warning whenever it is set.
 
 ### Example Configuration
 
@@ -215,7 +239,7 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
 
 ### Prerequisites
 
-- Node.js (v20 or later)
+- Node.js (v26 or later — matches the `engines` field and the container base image)
 - npm
 
 ### Installation
@@ -246,14 +270,14 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
     If you want to run the mock server locally for testing:
 
     ```bash
-    node --experimental-strip-types tests/mock-ez1-server.ts
+    node tests/mock-ez1-server.ts
     ```
 
     And then configure `DEVICE_1_IP=127.0.0.1` in your `.env` for `ez12mqtt`.
 
 ### Testing
 
-Run `node tests/e2e.ts`
+Run `npm test` for unit tests, or `npm run test:e2e` for the container-backed end-to-end suite.
 
 #### Testcontainers with Podman
 

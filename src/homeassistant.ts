@@ -3,7 +3,20 @@ import { logger } from './logger.ts';
 import { MQTTClient } from './mqtt.ts';
 import type { DeviceState } from './index.ts';
 
-const components = {
+// Declared rather than inferred: the entries are heterogeneous, and a union inferred from
+// the literal makes each optional property inaccessible on the members lacking it.
+interface ComponentDef {
+  name: string;
+  type: 'sensor' | 'binary_sensor' | 'number';
+  device_class: string;
+  state_class?: string;
+  unit?: string;
+  subtopic?: string;
+  value_template?: string;
+  mode?: string;
+}
+
+const components: Record<string, ComponentDef> = {
   channel1Power_W: { name: 'Channel 1 Power', type: 'sensor', device_class: 'power', state_class: 'measurement', unit: 'W' },
   channel1EnergySinceStartup_kWh: { name: 'Channel 1 Energy Since Startup', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
   channel1EnergyLifetime_kWh: { name: 'Channel 1 Energy Lifetime', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh', subtopic: 'energy', value_template: '{{ value_json.channel1EnergyLifetime_kWh }}' },
@@ -45,13 +58,13 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       device: device,
     };
 
-    if ((component as any).subtopic !== 'energy') {
+    if (component.subtopic !== 'energy') {
       payload.availability_topic = availabilityTopic;
       payload.payload_available = '1';
       payload.payload_not_available = '0';
     }
 
-    const subtopic = (component as any).subtopic || 'status';
+    const subtopic = component.subtopic || 'status';
     if (component.type !== 'number') {
       payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/${subtopic}`;
     }
