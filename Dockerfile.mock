@@ -15,8 +15,11 @@ COPY package*.json ./
 RUN npm install
 
 # Copy the mock server code
-COPY src ./src
-COPY tests/mock-ez1-server.ts ./tests/mock-ez1-server.ts
+COPY --chown=root:root src ./src
+COPY --chown=root:root tests/mock-ez1-server.ts ./tests/mock-ez1-server.ts
+
+# Port 8050 is unprivileged, so the mock has no reason to run as root either.
+USER node
 
 # Command to run the mock server
 CMD ["node", "tests/mock-ez1-server.ts"]
