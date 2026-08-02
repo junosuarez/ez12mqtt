@@ -239,7 +239,7 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
 
 ### Prerequisites
 
-- Node.js (v20 or later)
+- Node.js (v26 or later — matches the `engines` field and the container base image)
 - npm
 
 ### Installation
@@ -270,14 +270,14 @@ If you are using `podman-compose` instead of `docker compose`, you can run the s
     If you want to run the mock server locally for testing:
 
     ```bash
-    node --experimental-strip-types tests/mock-ez1-server.ts
+    node tests/mock-ez1-server.ts
     ```
 
     And then configure `DEVICE_1_IP=127.0.0.1` in your `.env` for `ez12mqtt`.
 
 ### Testing
 
-Run `node tests/e2e.ts`
+Run `npm test` for unit tests, or `npm run test:e2e` for the container-backed end-to-end suite.
 
 #### Testcontainers with Podman
 
