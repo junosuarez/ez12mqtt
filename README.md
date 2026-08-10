@@ -115,6 +115,7 @@ services:
 | `LATITUDE`               | Latitude for solar position. Enables the sun features (with `LONGITUDE`).                    |             |
 | `LONGITUDE`              | Longitude for solar position. Enables the sun features (with `LATITUDE`).                    |             |
 | `SUN_ELEVATION_THRESHOLD`| Sun elevation (deg) at or below which polling is skipped.                                    | `-6`        |
+| `METRICS_PORT`           | Port for the Prometheus `/metrics` endpoint. **Unset means no endpoint and no inbound port.** |             |
 
 ### Solar position
 
@@ -136,6 +137,34 @@ City-level precision is plenty — a few km moves sunrise by seconds.
 
 `SUN_NOW_OVERRIDE` (an ISO timestamp) pins "now" for solar position so the e2e suite can
 assert on a fixed day or night. It is test-only, and logs a warning whenever it is set.
+
+### Metrics
+
+Unset `METRICS_PORT` and nothing listens — the app keeps its outbound-only posture. Set it (e.g.
+`9100`) and `GET /metrics` serves the Prometheus text format. The container runs as `node`, so use a
+port above 1024.
+
+| Metric | Type | Meaning |
+| :-- | :-- | :-- |
+| `mqtt_connected` | gauge | 1/0. Unprefixed on purpose — the same name other services in the fleet use for "my MQTT dependency is up", so shared dashboards and alerts pick it up unmodified. Read from the client at scrape time, not remembered from an event. |
+| `ez12mqtt_poll_last_success_timestamp_seconds` | gauge | Unix time of the last poll that actually reached an inverter. |
+| `ez12mqtt_polling_expected` | gauge | 1 when the sun is up and polling should be happening, 0 when it is deliberately skipped. |
+| `ez12mqtt_polls_total` / `ez12mqtt_poll_errors_total` | counter | Attempts and failures. A poll skipped for darkness is neither. |
+| `ez12mqtt_device_online{device}` | gauge | Per-inverter reachability — the dependency edge. |
+| `ez12mqtt_sun_elevation_degrees` | gauge | Only present when a location is configured. |
+
+**Alert on freshness, not on a self-reported "up"** — but gate it on `ez12mqtt_polling_expected`:
+
+```promql
+ez12mqtt_polling_expected == 1
+  and (time() - ez12mqtt_poll_last_success_timestamp_seconds) > 5 * 30
+```
+
+The gate is the whole point. The EZ1 is powered by its own PV input, so it is genuinely offline every
+night and the success timestamp is legitimately ~10 hours stale by dawn. An ungated freshness alert
+fires every single night, and an alert that cries wolf nightly gets muted — which leaves you worse off
+than having no alert at all. Give the rule a `for:` longer than a poll interval so a normal sunrise
+resolves it before it fires.
 
 ### Example Configuration
 

@@ -4,7 +4,7 @@ type LogLevel = 'INFO' | 'DEBUG' | 'WARN' | 'ERROR';
 
 interface LogEntry {
   timestamp: string;
-  level: LogLevel;
+  level: Lowercase<LogLevel>;
   message: string;
   [key: string]: any; // Allow arbitrary additional properties
 }
@@ -29,7 +29,11 @@ function log(level: LogLevel, message: string, context?: Record<string, any>): v
 
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
-    level,
+    // Lowercase in the OUTPUT, uppercase in the code. Loki's level detection matches lowercase
+    // values, so `"level":"INFO"` was landing as detected_level=unknown and losing the ability to
+    // filter or alert on error rates. The LogLevel type stays uppercase because the ordering table
+    // and every call site use it.
+    level: level.toLowerCase() as Lowercase<LogLevel>,
     message,
     ...context,
   };

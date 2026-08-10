@@ -26,6 +26,12 @@ export class MQTTClient {
     };
   }
 
+  /** Live read for the metrics gauge — reading the client's own flag beats tracking events, which
+   * can miss a transition and leave the gauge asserting something untrue. */
+  public get connected(): boolean {
+    return this.client?.connected ?? false;
+  }
+
   public connect(): Promise<void> {
     return new Promise((resolve) => {
       logger.info(`Attempting to connect to MQTT broker at ${this.mqttUrl}`);

@@ -28,6 +28,12 @@ interface Config {
   sunElevationThreshold: number;
   /** Test-only: pins "now" for solar position so e2e can assert on a fixed day or night. */
   sunNowOverride?: Date;
+  /**
+   * Port for the Prometheus /metrics endpoint. UNSET MEANS OFF — no listener is created and the
+   * app keeps its outbound-only posture. There is deliberately no default: opening an inbound port
+   * should be something you asked for.
+   */
+  metricsPort?: number;
 }
 
 function validateConfig(config: Partial<Config>): Config {
@@ -51,6 +57,14 @@ function validateConfig(config: Partial<Config>): Config {
 
   if (!config.pollInterval || isNaN(config.pollInterval) || config.pollInterval <= 0) {
     errors.push('POLL_INTERVAL is required and must be a positive number.');
+  }
+
+  // Only validated when present: absent is the documented "off" state, but a typo'd port should
+  // fail at startup rather than silently leave metrics disabled and be discovered months later.
+  if (config.metricsPort !== undefined) {
+    if (isNaN(config.metricsPort) || config.metricsPort < 1 || config.metricsPort > 65535) {
+      errors.push('METRICS_PORT must be a port number between 1 and 65535 when set.');
+    }
   }
 
   if (errors.length > 0) {
@@ -123,6 +137,13 @@ function parseSunNowOverride(): Date | undefined {
   return date;
 }
 
+/** Undefined (not a default port) when unset or blank — that is how the endpoint stays off. */
+function parseMetricsPort(): number | undefined {
+  const raw = process.env.METRICS_PORT?.trim();
+  if (!raw) return undefined;
+  return parseInt(raw, 10);
+}
+
 const rawLogLevel = process.env.LOG_LEVEL?.toUpperCase();
 const logLevel: 'INFO' | 'DEBUG' = (rawLogLevel === 'DEBUG' ? 'DEBUG' : 'INFO');
 setLogLevel(logLevel);
@@ -141,6 +162,7 @@ const config: Config = validateConfig({
   ...parseLocation(),
   sunElevationThreshold: parseFloat(process.env.SUN_ELEVATION_THRESHOLD || '-6'),
   sunNowOverride: parseSunNowOverride(),
+  metricsPort: parseMetricsPort(),
 });
 
 export default config;
