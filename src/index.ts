@@ -1,5 +1,6 @@
 import config from './config.ts';
 import { logger } from './logger.ts';
+import { recordDeviceOnline, recordPollError, recordPollSuccess, startMetricsServer } from './metrics.ts';
 import { EZ1API } from './api.ts';
 import { MQTTClient } from './mqtt.ts';
 
@@ -28,6 +29,7 @@ export interface DeviceState {
 
 const mqttClient = new MQTTClient();
 const deviceStates: DeviceState[] = [];
+let metricsServer: ReturnType<typeof startMetricsServer> = null;
 
 // Initialize device states from config
 config.devices.forEach(deviceConfig => {
@@ -114,9 +116,22 @@ async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | n
   const wasOnline = deviceState.isOnline;
   deviceState.isOnline = !!outputData;
 
+  const seenAt = Math.floor(Date.now() / 1000);
   if (deviceState.isOnline) {
-    deviceState.lastSeenAt = Math.floor(Date.now() / 1000);
+    deviceState.lastSeenAt = seenAt;
   }
+
+  // Recorded here, where online-ness is actually decided, so the metric cannot drift from the state
+  // the rest of the app acts on. A poll skipped for darkness is neither a success nor an error — it
+  // was never attempted, and counting it either way would corrupt both signals.
+  if (!asleep) {
+    if (deviceState.isOnline) {
+      recordPollSuccess(seenAt);
+    } else {
+      recordPollError();
+    }
+  }
+  recordDeviceOnline(deviceState.nickname || deviceState.ip, deviceState.isOnline);
 
   if (deviceState.isOnline !== wasOnline) {
     mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
@@ -244,6 +259,18 @@ async function restoreState(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // BEFORE the MQTT connect, deliberately: `connect()` resolves only once the broker answers, so
+  // starting the endpoint afterwards would mean the one situation `mqtt_connected` exists to report
+  // — the broker being unreachable — is also the situation where nothing is listening to report it.
+  metricsServer = startMetricsServer({
+    mqttConnected: () => mqttClient.connected,
+    pollingExpected: () => {
+      const sun = currentSun();
+      return sun === null || sun.isSunUp;
+    },
+    sunElevationDeg: () => currentSun()?.sunElevation_deg ?? null,
+  });
+
   await mqttClient.connect();
 
   await restoreState();
@@ -302,6 +329,7 @@ async function main(): Promise<void> {
 
 function shutdown() {
   logger.info('Shutting down...');
+  metricsServer?.close();
   for (const deviceState of deviceStates) {
     if (deviceState.isOnline) {
       mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '0', true);

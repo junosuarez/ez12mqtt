@@ -15,7 +15,9 @@ The application will be a single, long-running Node.js process written in TypeSc
 *   **MQTT Publisher:** Connects to the MQTT broker and publishes the data.
 *   **Logger:** A simple logger that writes JSON lines to stdout.
 
-The application will not have any inbound network ports, it only makes outbound connections to the EZ1 devices and the MQTT broker.
+*   **Metrics Endpoint (optional):** A minimal HTTP listener serving Prometheus text at `/metrics`.
+
+The application makes outbound connections to the EZ1 devices and the MQTT broker. It has **no inbound network port unless `METRICS_PORT` is set** — the endpoint is opt-in precisely so that this property still holds by default. It exists because a purely outbound process cannot be scraped or probed, so nothing outside it can distinguish "polling happily" from "wedged"; the metrics are the only available liveness signal. See README → Metrics for the exposed series and why the freshness alert must be gated on `ez12mqtt_polling_expected`.
 
 ## 3. Configuration
 
@@ -28,6 +30,7 @@ Configuration will be managed through environment variables.
 | `DEVICE_{n}_DESCRIPTION`| The description of the {n}th device. | |
 | `MQTT_HOST` | The hostname or IP address of the MQTT broker. | `localhost` |
 | `MQTT_PORT` | The port of the MQTT broker. | `1883` |
+| `METRICS_PORT` | Port for the Prometheus `/metrics` endpoint. Unset disables it entirely. | (unset) |
 | `MQTT_USER` | The username for MQTT authentication. | |
 | `MQTT_PASSWORD` | The password for MQTT authentication. | |
 | `MQTT_BASE_TOPIC` | The base topic for all MQTT messages. | `ez12mqtt` |

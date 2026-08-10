@@ -31,7 +31,8 @@ WORKDIR /app
 COPY --from=build --chown=root:root /app/node_modules ./node_modules
 COPY --chown=root:root src ./src
 
-# Outbound connections only — nothing to bind, so nothing needs privilege.
+# Outbound connections only by default; METRICS_PORT optionally binds one unprivileged port.
+# Either way nothing needs privilege — which is also why that port must be above 1024.
 USER node
 
 CMD ["node", "src/index.ts"]
