@@ -30,7 +30,18 @@ export interface MetricSources {
    */
   pollingExpected: () => boolean;
   sunElevationDeg: () => number | null;
+  /** 0 while MQTT is connected; otherwise ms of continuous disconnection. Drives /healthz. */
+  mqttDisconnectedForMs: () => number;
 }
+
+/**
+ * How long MQTT can be continuously unreachable before /healthz starts failing.
+ *
+ * Long enough that an ordinary broker restart (seconds) never flaps the probe; short enough that a
+ * wedged reconnect loop gets caught in about a minute by k8s's own liveness/readiness checks,
+ * instead of running indefinitely with the pod stuck at `Ready: true`.
+ */
+export const MQTT_HEALTHY_GRACE_MS = 60_000;
 
 export const counters = {
   polls: 0,
@@ -133,6 +144,15 @@ export function startMetricsServer(sources: MetricSources): Server | null {
 
   const server = http.createServer((req, res) => {
     const path = (req.url || '').split('?')[0].replace(/\/+$/, '');
+
+    if (path === '/healthz') {
+      const disconnectedForMs = sources.mqttDisconnectedForMs();
+      const healthy = disconnectedForMs < MQTT_HEALTHY_GRACE_MS;
+      res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'text/plain' })
+        .end(healthy ? 'ok' : `mqtt disconnected for ${Math.round(disconnectedForMs / 1000)}s`);
+      return;
+    }
+
     if (path !== '/metrics' && path !== '') {
       res.writeHead(404).end();
       return;

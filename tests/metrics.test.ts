@@ -6,7 +6,7 @@ import { after, before, describe, it } from 'node:test';
 process.env.DEVICE_1_IP ??= '10.0.0.1';
 process.env.DEVICE_1_NICKNAME ??= 'test-inverter';
 
-const { counters, deviceOnline, metricsText, recordDeviceOnline, recordPollError, recordPollSuccess } =
+const { counters, deviceOnline, metricsText, recordDeviceOnline, recordPollError, recordPollSuccess, MQTT_HEALTHY_GRACE_MS } =
   await import('../src/metrics.ts');
 
 function parse(text: string): Map<string, string> {
@@ -141,5 +141,44 @@ describe('metrics endpoint is opt-in', () => {
 
   it('treats a blank METRICS_PORT as unset rather than as a parse error', async () => {
     assert.equal((await startServerWith('   ')).listening, false);
+  });
+});
+
+describe('/healthz — the signal k8s liveness/readiness key off', () => {
+  // Own subprocess for the same module-singleton reason as above; also lets each case pass a
+  // different disconnected-duration without racing the module-level counters in this process.
+  async function healthzStatus(disconnectedForMs: number) {
+    const { execFileSync } = await import('node:child_process');
+    const env = { ...process.env, DEVICE_1_IP: '10.0.0.1', METRICS_PORT: '19101' } as Record<string, string>;
+    const script = `
+      const m = await import('./src/metrics.ts');
+      const server = m.startMetricsServer({
+        mqttConnected: () => false, pollingExpected: () => true, sunElevationDeg: () => null,
+        mqttDisconnectedForMs: () => ${disconnectedForMs},
+      });
+      const res = await fetch('http://localhost:19101/healthz');
+      console.log(JSON.stringify({ status: res.status, body: await res.text() }));
+      server?.close();
+    `;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env, encoding: 'utf8', cwd: new URL('..', import.meta.url).pathname,
+    });
+    return JSON.parse(out.trim().split('\n').filter((l) => l.startsWith('{')).pop()!);
+  }
+
+  it('is healthy while within the grace period', async () => {
+    const { status } = await healthzStatus(0);
+    assert.equal(status, 200);
+  });
+
+  it('is healthy just under the grace threshold', async () => {
+    const { status } = await healthzStatus(MQTT_HEALTHY_GRACE_MS - 1000);
+    assert.equal(status, 200);
+  });
+
+  it('fails once disconnected past the grace period, and says why', async () => {
+    const { status, body } = await healthzStatus(MQTT_HEALTHY_GRACE_MS + 5000);
+    assert.equal(status, 503);
+    assert.match(body, /disconnected for \d+s/);
   });
 });

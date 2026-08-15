@@ -258,6 +258,30 @@ async function restoreState(): Promise<void> {
   });
 }
 
+// Runs once per successful (re)connect — not just the first one. A publish attempted while
+// disconnected is dropped, not queued, so any retained topic (info, maxPower, discovery,
+// availability) for a device that came online during an outage needs a deliberate resend once
+// the broker is reachable again, rather than waiting for the device's next offline→online edge.
+async function onMqttConnected(): Promise<void> {
+  await restoreState();
+
+  for (const deviceState of deviceStates) {
+    if (config.homeAssistantEnable) {
+      mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
+    }
+
+    if (deviceState.isOnline) {
+      mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '1', true);
+      await fetchAndPublishInfo(deviceState);
+      await fetchAndPublishMaxPower(deviceState);
+      if (config.homeAssistantEnable) {
+        publishDiscoveryMessages(deviceState, mqttClient);
+        deviceState.discoveryPublished = true;
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   // BEFORE the MQTT connect, deliberately: `connect()` resolves only once the broker answers, so
   // starting the endpoint afterwards would mean the one situation `mqtt_connected` exists to report
@@ -269,11 +293,8 @@ async function main(): Promise<void> {
       return sun === null || sun.isSunUp;
     },
     sunElevationDeg: () => currentSun()?.sunElevation_deg ?? null,
+    mqttDisconnectedForMs: () => mqttClient.disconnectedForMs(),
   });
-
-  await mqttClient.connect();
-
-  await restoreState();
 
   mqttClient.on('message', (topic, message) => {
     const messageString = message.toString();
@@ -306,16 +327,19 @@ async function main(): Promise<void> {
     }
   });
 
-  // Initial poll for all devices
+  // Fires on the first connect AND every reconnect (mqtt.js re-emits 'connect' each time).
+  mqttClient.on('connect', () => {
+    onMqttConnected().catch(error => logger.error('onMqttConnected failed', { error: error.message }));
+  });
+
+  // Not awaited: mqtt.js retries internally (see mqtt.ts), and the inverter poll loop below must
+  // never wait on the broker. A stuck first connect attempt used to block everything after it,
+  // including polling, leaving the process silently idle for as long as the broker was unreachable.
+  void mqttClient.connect();
+
+  // Initial poll for all devices, independent of MQTT connectivity.
   for (const deviceState of deviceStates) {
-    if (config.homeAssistantEnable && !deviceState.discoveryPublished && deviceState.deviceId) {
-      publishDiscoveryMessages(deviceState, mqttClient);
-      deviceState.discoveryPublished = true;
-    }
     await pollDevice(deviceState);
-    if (config.homeAssistantEnable) {
-      mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
-    }
   }
 
   // Set up polling interval

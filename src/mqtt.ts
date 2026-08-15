@@ -7,14 +7,29 @@ export class MQTTClient {
   private client: MqttClient | null = null;
   private readonly mqttUrl: string;
   private readonly options: IClientOptions;
+  private heartbeatStarted = false;
+  /** Unix ms since the client has been continuously disconnected; null while connected. Starts
+   * "disconnected" at construction so a stuck initial connect counts toward the grace period
+   * exactly like a dropped one — otherwise a connect that never succeeds looks indistinguishable
+   * from one that hasn't been attempted yet. */
+  private disconnectedSince: number | null = Date.now();
 
-  constructor() {
+  private readonly connectFn: typeof mqtt.connect;
+
+  /** connectFn is injectable so tests can drive a fake client without a real broker or module
+   * mocking — Node's strip-only TS mode doesn't support constructor parameter properties. */
+  constructor(connectFn: typeof mqtt.connect = mqtt.connect) {
+    this.connectFn = connectFn;
     this.mqttUrl = `mqtt://${config.mqttHost}:${config.mqttPort}`;
     this.options = {
       clientId: `ez12mqtt_${Math.random().toString(16).slice(3)}`,
       clean: true,
       connectTimeout: 4000,
       reconnectPeriod: 1000,
+      // Plain reconnectPeriod only covers timeouts and drops; a broker that actively rejects the
+      // CONNACK (e.g. mid-restart with a stale config) needs this too, or the client can wedge
+      // permanently on that one rejected attempt.
+      reconnectOnConnackError: true,
       ...(config.mqttUser && { username: config.mqttUser }),
       ...(config.mqttPassword && { password: config.mqttPassword }),
       will: {
@@ -32,20 +47,37 @@ export class MQTTClient {
     return this.client?.connected ?? false;
   }
 
+  /** 0 while connected; otherwise how long the client has been continuously unable to connect.
+   * Feeds the /healthz grace period — see metrics.ts. */
+  public disconnectedForMs(): number {
+    return this.disconnectedSince === null ? 0 : Date.now() - this.disconnectedSince;
+  }
+
   public connect(): Promise<void> {
     return new Promise((resolve) => {
       logger.info(`Attempting to connect to MQTT broker at ${this.mqttUrl}`);
-      this.client = mqtt.connect(this.mqttUrl, this.options);
+      this.client = this.connectFn(this.mqttUrl, this.options);
 
       this.client.on('connect', () => {
         logger.info('Successfully connected to MQTT broker.');
-        this.startHeartbeat();
+        this.disconnectedSince = null;
+        // Guarded: mqtt.js emits 'connect' again on every successful reconnect, and this ran
+        // unconditionally before — stacking a fresh 30s interval on top of the last one on every
+        // broker blip, none of which ever got cleared.
+        if (!this.heartbeatStarted) {
+          this.heartbeatStarted = true;
+          this.startHeartbeat();
+        }
         resolve();
       });
 
       this.client.on('error', (error) => {
         logger.error(`MQTT connection error: ${error.message}`);
-        this.client?.end(); // Close client on error to trigger reconnect
+        if (this.disconnectedSince === null) this.disconnectedSince = Date.now();
+        // NOT client.end() here: that call stops mqtt.js's own reconnect loop entirely (it does
+        // not "trigger" one, despite the old comment) — it is exactly why a failed *first* connect
+        // attempt, e.g. a connack timeout, could wedge the process indefinitely even with
+        // reconnectPeriod configured. Just log and let the client retry.
       });
 
       this.client.on('reconnect', () => {
@@ -54,6 +86,7 @@ export class MQTTClient {
 
       this.client.on('close', () => {
         logger.warn('MQTT connection closed.');
+        if (this.disconnectedSince === null) this.disconnectedSince = Date.now();
       });
     });
   }
@@ -113,9 +146,12 @@ export class MQTTClient {
       this.publish(`${config.mqttBaseTopic}/_status`, payload, true);
     };
 
-    // Publish immediately and then every 30 seconds
+    // Publish immediately and then every 30 seconds. Unref'd: this heartbeat is a nicety for
+    // whoever's watching `_status`, not a reason to keep the event loop alive — the metrics
+    // server and poll loop already do that, and leaving it ref'd meant a test driving 'connect'
+    // on a fake client would hang node --test forever.
     publishStatus();
-    setInterval(publishStatus, 30 * 1000);
+    setInterval(publishStatus, 30 * 1000).unref();
   }
 
   public publish(topic: string, payload: object, retain: boolean = false): void {
