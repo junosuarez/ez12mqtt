@@ -95,6 +95,11 @@ export class MQTTClient {
       });
 
       this.client.on('close', () => {
+        // disconnect() clears this.client first, so a null here means we closed it on purpose.
+        if (this.client === null) {
+          logger.info('MQTT connection closed.');
+          return;
+        }
         logger.warn('MQTT connection closed.');
         if (this.disconnectedSince === null) this.disconnectedSince = Date.now();
       });

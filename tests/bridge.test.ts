@@ -119,6 +119,14 @@ describe('bridge reducer — polling', () => {
     assert.ok(!effects.some((e) => e.type === 'fetchStatus' || e.type === 'recordPoll'));
   });
 
+  it('logs the first result too: reached at startup, or unreachable from the outset', () => {
+    const logs = (output: OutputData | null) => run(initialState(settings, [{ ip: IP, nickname: 'inv' }]), [
+      { type: 'tick', now: 1, sun: day }, { type: 'statusFetched', ip: IP, now: 1, sun: day, output, alarm: null },
+    ]).effects.flatMap((e) => (e.type === 'log' ? [`${e.level}: ${e.message}`] : []));
+    assert.deepEqual(logs(output), ['info: Device inv is online.']);
+    assert.deepEqual(logs(null), ['warn: Device inv is not reachable.']);
+  });
+
   it('publishes availability 0 on the first offline result, clearing a stale retained 1', () => {
     const { effects } = run(initialState(settings, [{ ip: IP, nickname: 'inv' }]), [
       ...connected, { type: 'tick', now: 1, sun: day }, { type: 'statusFetched', ip: IP, now: 1, sun: day, output: null, alarm: null },

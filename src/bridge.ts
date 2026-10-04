@@ -383,12 +383,16 @@ function applyStatus(
     if (!skipped) effects.push({ type: 'recordPoll', ok: !!output, at: now });
     effects.push({ type: 'recordDeviceOnline', device: deviceName(x), online: isOnline(link) });
 
-    if (link !== d.link && d.link !== 'unknown') {
+    // Including the first result: a healthy start should say the inverter was reached, and one
+    // that's unreachable from the outset deserves the same warning as one that drops later.
+    if (link !== d.link) {
+      const name = deviceName(x);
+      const first = d.link === 'unknown';
       effects.push(link === 'online'
-        ? { type: 'log', level: 'info', message: `Device ${deviceName(x)} is now online.` }
+        ? { type: 'log', level: 'info', message: first ? `Device ${name} is online.` : `Device ${name} is now online.` }
         : link === 'asleep'
-          ? { type: 'log', level: 'info', message: `Device ${deviceName(x)} is asleep for the night.` }
-          : { type: 'log', level: 'warn', message: `Device ${deviceName(x)} went offline.` });
+          ? { type: 'log', level: 'info', message: `Device ${name} is asleep for the night.` }
+          : { type: 'log', level: 'warn', message: first ? `Device ${name} is not reachable.` : `Device ${name} went offline.` });
     }
 
     // Refresh identity on every online edge, and keep retrying while it's unknown.
