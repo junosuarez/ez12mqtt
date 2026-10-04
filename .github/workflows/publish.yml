@@ -107,3 +107,26 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  ready:
+    # The one check to require in branch protection: green only when every job above succeeded.
+    # Requiring this instead of each job means the rule never needs updating when a job is added or
+    # renamed. `always()` so it still runs, and fails, when something it needs failed or was
+    # cancelled; a needed job that never ran would otherwise leave this skipped, which GitHub
+    # treats as passing.
+    if: always()
+    needs: [test, e2e, publish]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require every job to have succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != success ]; then
+              echo "::error::Not ready: a required job finished with '$result'."
+              exit 1
+            fi
+          done
