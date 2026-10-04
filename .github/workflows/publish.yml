@@ -28,11 +28,28 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm test
 
+  e2e:
+    # The container-backed suite (tests/e2e.ts): real mosquitto, the mock inverter and the built
+    # image. Unit tests can't see wiring regressions — #7 broke startup discovery and max-power
+    # control while `npm test` stayed green, and nothing ran this suite to notice.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      # Not `npm run test:e2e`: that script is wired for local podman (socket override, Ryuk off,
+      # podman's auth file). The runner's stock Docker is what testcontainers expects by default.
+      - run: node tests/e2e.ts
+
   publish:
     # On a PR this job builds but pushes nothing. Naming it "publish" regardless made a green
     # check on an open PR look like it had already published.
     name: ${{ github.event_name == 'pull_request' && 'build image (no push)' || 'publish image' }}
-    needs: test
+    needs: [test, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read
