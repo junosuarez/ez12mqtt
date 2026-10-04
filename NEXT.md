@@ -5,7 +5,7 @@ This document summarizes the development of the `ez12mqtt` project, highlighting
 ## 1. Project Specifications
 
 *   **Goal:** To create a Node.js application that polls data from EZ1 microinverters and publishes it to an MQTT server for integration with systems like Home Assistant.
-*   **Technology Stack:** Node.js (TypeScript), MQTT, HTTP API communication (axios).
+*   **Technology Stack:** Node.js (TypeScript), MQTT, HTTP API communication (Node's built-in `fetch`).
 *   **Containerization:** Designed for Docker deployment with configuration via environment variables (12-factor app principles).
 *   **Polling:** Polls EZ1 microinverters every 30 seconds for fast-changing data (`getOutputData`, `getAlarm`). Stored info (`getDeviceInfo`, `getMaxPower`) is fetched at startup and on online/offline state changes.
 *   **MQTT Topic Structure:**
