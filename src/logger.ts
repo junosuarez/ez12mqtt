@@ -1,5 +1,3 @@
-import { inspect } from 'util';
-
 type LogLevel = 'INFO' | 'DEBUG' | 'WARN' | 'ERROR';
 
 interface LogEntry {
@@ -40,25 +38,24 @@ function log(level: LogLevel, message: string, context?: LogContext): void {
     ...context,
   };
 
-  // Use inspect to handle circular references in context objects
-  console.log(JSON.stringify(entry, (key, value: unknown): unknown => {
-    if (typeof value === 'object' && value !== null) {
-      // Detect circular references
-      const cache = new Set();
-      return JSON.parse(JSON.stringify(value, (k, v: unknown): unknown => {
-        if (typeof v === 'object' && v !== null) {
-          if (cache.has(v)) {
-            // Circular reference found, discard key
-            return;
-          }
-          // Store value in our collection
-          cache.add(v);
-        }
-        return v;
-      })) as unknown;
-    }
-    return value;
-  }));
+  console.log(stringify(entry));
+}
+
+/**
+ * JSON.stringify that survives circular references in a context object, replacing only true
+ * cycles with "[Circular]". Tracks the current path of ancestors rather than every object seen,
+ * so the same object appearing twice (a shared reference, not a cycle) is still logged both times.
+ */
+export function stringify(value: unknown): string {
+  const ancestors: unknown[] = [];
+  return JSON.stringify(value, function (this: unknown, _key: string, v: unknown): unknown {
+    if (typeof v !== 'object' || v === null) return v;
+    // `this` is the object holding v; anything deeper than it on the stack is a finished sibling.
+    while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+    if (ancestors.includes(v)) return '[Circular]';
+    ancestors.push(v);
+    return v;
+  });
 }
 
 export const logger = {
