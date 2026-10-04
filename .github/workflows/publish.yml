@@ -33,6 +33,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
+      # Rejects explicit `any`, which tsc has no switch for (noImplicitAny only covers inferred any).
+      - run: npm run lint
       - run: npm test
 
   e2e:
