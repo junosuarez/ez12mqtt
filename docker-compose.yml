@@ -1,12 +1,9 @@
-version: "3.8"
-
 services:
   mqtt-broker:
     image: eclipse-mosquitto:2.0.15
     container_name: mosquitto
     ports:
       - "1883:1883"
-      - "9001:9001"
     volumes:
       # This configuration is for testing purposes only and disables authentication.
       # DO NOT USE IN PRODUCTION.
@@ -42,14 +39,12 @@ services:
       - LOG_LEVEL=DEBUG
       - DEVICE_1_IP=mock-ez1
       - DEVICE_1_NICKNAME=mock_inverter
-      - DEVICE_1_DESCRIPTION="My Mock Inverter"
+      - DEVICE_1_DESCRIPTION=My Mock Inverter
       - HOMEASSISTANT_ENABLE=true
     depends_on:
       - mqtt-broker
       - mock-ez1
     restart: unless-stopped
-
-
 
 volumes:
   mosquitto_data:

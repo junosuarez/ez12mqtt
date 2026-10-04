@@ -3,3 +3,5 @@ dist
 .env
 Dockerfile
 Dockerfile.mock
+.git
+.DS_Store
