@@ -353,10 +353,13 @@ async function onMqttConnected(): Promise<void> {
     if (deviceState.isOnline) {
       mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '1', true);
       await fetchAndPublishMaxPower(deviceState);
-      if (config.homeAssistantEnable) {
-        publishDiscoveryMessages(deviceState, mqttClient);
-        deviceState.discoveryPublished = true;
-      }
+    }
+
+    // Online or not: an inverter asleep at startup still has an identity restored from its retained
+    // info, and Home Assistant should know about it before sunrise rather than only after.
+    if (config.homeAssistantEnable && deviceState.deviceId) {
+      publishDiscoveryMessages(deviceState, mqttClient);
+      deviceState.discoveryPublished = true;
     }
   }
 }
