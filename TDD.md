@@ -54,10 +54,15 @@ The configuration manager will parse these environment variables and create a li
 
 ### 4.3. Polling Engine
 
-*   At startup, it will fetch `getDeviceInfo` and `getMaxPower` for each device and publish to the `info` topic.
-*   It will use `setInterval` to trigger polling of `getOutputData` and `getAlarm` at the configured interval.
-*   If a device's online/offline status changes, it will re-fetch `getDeviceInfo` and `getMaxPower` and update the `info` topic.
-*   It will then pass the fetched data to the MQTT publisher to be published on the `status` topic.
+The bridge's behaviour is a pure reducer, `reduce(state, event) → { state, effects }` in `src/bridge.ts`; `src/index.ts` is a thin runner that owns all I/O.
+
+*   **Events in:** timer ticks, inverter HTTP results, MQTT connect/disconnect/messages, and SIGTERM/SIGINT. The runner reduces them strictly one at a time, so no two pieces of logic ever interleave.
+*   **Effects out:** inverter requests, MQTT publishes/subscriptions, Home Assistant discovery, metrics, logs, and exit. Slow effects (HTTP) report back later as further events.
+*   **Per device:** an identity (device ID and hardware min/max power, from `getDeviceInfo` or a retained `info`), a link state (`unknown`/`online`/`offline`/`asleep`), and an in-flight flag, so a tick never starts a second poll of a device whose last one hasn't returned.
+*   **Connection:** `disconnected → restoring → ready`, plus a terminal `stopping`. Command subscriptions are made on connect, retained `info` is collected during `restoring`, and discovery is only published once `ready`.
+*   On each tick, `getOutputData` and `getAlarm` are polled and published on `status`. On every offline→online edge, and until it first succeeds, `getDeviceInfo` is re-fetched and published on `info`.
+*   Device topics are only published once the device's topic is known: its nickname, or its device ID once `getDeviceInfo` (or a retained `info`, matched by IP) has supplied it.
+*   On shutdown, online devices are marked unavailable and `_status` offline, and the process exits only after the MQTT client has flushed and disconnected.
 
 ### 4.4. API Client
 

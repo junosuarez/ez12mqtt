@@ -16,7 +16,7 @@ export class MQTTClient {
   private client: MqttClient | null = null;
   private readonly mqttUrl: string;
   private readonly options: IClientOptions;
-  private heartbeatStarted = false;
+  private heartbeat: NodeJS.Timeout | null = null;
   /** Unix ms since the client has been continuously disconnected; null while connected. Starts
    * "disconnected" at construction so a stuck initial connect counts toward the grace period
    * exactly like a dropped one — otherwise a connect that never succeeds looks indistinguishable
@@ -77,10 +77,7 @@ export class MQTTClient {
         // Guarded: mqtt.js emits 'connect' again on every successful reconnect, and this ran
         // unconditionally before — stacking a fresh 30s interval on top of the last one on every
         // broker blip, none of which ever got cleared.
-        if (!this.heartbeatStarted) {
-          this.heartbeatStarted = true;
-          this.startHeartbeat();
-        }
+        if (!this.heartbeat) this.startHeartbeat();
         resolve();
       });
 
@@ -98,6 +95,11 @@ export class MQTTClient {
       });
 
       this.client.on('close', () => {
+        // disconnect() clears this.client first, so a null here means we closed it on purpose.
+        if (this.client === null) {
+          logger.info('MQTT connection closed.');
+          return;
+        }
         logger.warn('MQTT connection closed.');
         if (this.disconnectedSince === null) this.disconnectedSince = Date.now();
       });
@@ -152,21 +154,19 @@ export class MQTTClient {
     });
   }
 
-  private startHeartbeat(): void {
-    const publishStatus = () => {
-      const payload = {
-        online: true,
-        uptime_s: Math.floor(process.uptime()),
-      };
-      this.publish(`${config.mqttBaseTopic}/_status`, payload, true);
-    };
+  /** Retained `<base>/_status`. The LWT covers a crash; a clean shutdown has to say so itself,
+   * since a graceful disconnect deliberately doesn't trigger the will. */
+  public publishBridgeStatus(online: boolean): void {
+    this.publish(`${config.mqttBaseTopic}/_status`, online ? { online, uptime_s: Math.floor(process.uptime()) } : { online }, true);
+  }
 
+  private startHeartbeat(): void {
     // Publish immediately and then every 30 seconds. Unref'd: this heartbeat is a nicety for
     // whoever's watching `_status`, not a reason to keep the event loop alive — the metrics
     // server and poll loop already do that, and leaving it ref'd meant a test driving 'connect'
     // on a fake client would hang node --test forever.
-    publishStatus();
-    setInterval(publishStatus, 30 * 1000).unref();
+    this.publishBridgeStatus(true);
+    this.heartbeat = setInterval(() => this.publishBridgeStatus(true), 30 * 1000).unref();
   }
 
   public publish(topic: string, payload: object, retain: boolean = false): void {
@@ -196,11 +196,18 @@ export class MQTTClient {
     });
   }
 
-  public disconnect(): void {
-    if (this.client) {
-      this.client.end();
-      this.client = null;
-      logger.info('Disconnected from MQTT broker.');
-    }
+  /** Graceful: publishes already handed to the client are written before the DISCONNECT packet,
+   * so awaiting this is what makes "publish availability 0, then exit" actually deliver the 0. */
+  public disconnect(): Promise<void> {
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    const client = this.client;
+    this.client = null;
+    if (!client) return Promise.resolve();
+    return new Promise((resolve) => {
+      client.end(false, {}, () => {
+        logger.info('Disconnected from MQTT broker.');
+        resolve();
+      });
+    });
   }
 }

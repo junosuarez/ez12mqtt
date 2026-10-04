@@ -1,7 +1,4 @@
-import config from './config.ts';
-import { logger } from './logger.ts';
-import { MQTTClient } from './mqtt.ts';
-import type { DeviceState } from './index.ts';
+import type { Limits } from './bridge.ts';
 
 // Declared rather than inferred: the entries are heterogeneous, and a union inferred from
 // the literal makes each optional property inaccessible on the members lacking it.
@@ -55,28 +52,35 @@ const components: Record<string, ComponentDef> = {
   maxPower_W: { name: 'Max Power', type: 'number', device_class: 'power', unit: 'W', mode: 'slider' },
 };
 
-export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: MQTTClient) {
-  if (!config.homeAssistantEnable || !deviceState.deviceId) {
-    return;
-  }
+export interface DiscoveryTarget {
+  baseTopic: string;
+  discoveryPrefix: string;
+  /** The device's topic segment: its nickname, or its device ID. */
+  address: string;
+  deviceId: string;
+  name: string;
+  /** Hardware limits for the Max Power slider; omitted from the payload when unknown. */
+  limits: Limits | null;
+}
 
-  logger.info(`Publishing Home Assistant discovery messages for device ${deviceState.deviceId}`);
-
+/** Pure: the retained discovery messages for one device. Publishing them is the caller's job. */
+export function discoveryMessages(target: DiscoveryTarget): { topic: string; payload: DiscoveryPayload }[] {
+  const { baseTopic, discoveryPrefix, address, deviceId } = target;
   const device = {
-    identifiers: [deviceState.deviceId],
-    name: deviceState.nickname || deviceState.deviceId,
+    identifiers: [deviceId],
+    name: target.name,
     model: 'EZ1 Microinverter',
     manufacturer: 'APsystems',
   };
 
-  const availabilityTopic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`;
+  const availabilityTopic = `${baseTopic}/${address}/availability`;
 
-  for (const [key, component] of Object.entries(components)) {
-    const discoveryTopic = `${config.homeAssistantDiscoveryPrefix}/${component.type}/${deviceState.deviceId}/${key}/config`;
+  return Object.entries(components).map(([key, component]) => {
+    const discoveryTopic = `${discoveryPrefix}/${component.type}/${deviceId}/${key}/config`;
 
     const payload: DiscoveryPayload = {
       name: component.name,
-      unique_id: `${deviceState.deviceId}_${key}`,
+      unique_id: `${deviceId}_${key}`,
       device: device,
       value_template: component.value_template || `{{ value_json.${key} }}`,
     };
@@ -89,7 +93,7 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
 
     const subtopic = component.subtopic || 'status';
     if (component.type !== 'number') {
-      payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/${subtopic}`;
+      payload.state_topic = `${baseTopic}/${address}/${subtopic}`;
     }
 
     if (component.type === 'sensor') {
@@ -101,20 +105,20 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       payload.payload_off = false;
       payload.device_class = component.device_class;
     } else if (component.type === 'number') {
-      payload.command_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`;
+      payload.command_topic = `${baseTopic}/${address}/maxPower_W/set`;
       payload.command_template = '{{ value }}';
-      payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W`;
+      payload.state_topic = `${baseTopic}/${address}/maxPower_W`;
       payload.value_template = `{{ value_json.maximumPowerOutput_W }}`;
       payload.unit_of_measurement = component.unit;
-      payload.device_class = component.device_class;      
+      payload.device_class = component.device_class;
       payload.mode = component.mode;
       // Note: Home Assistant's MQTT discovery for numbers uses `min` and `max`,
       // which differs from the `native_min_value` and `native_max_value` properties
       // used in the core entity model.
-      payload.min = deviceState.minPower;
-      payload.max = deviceState.maxPower;
+      payload.min = target.limits?.min_W;
+      payload.max = target.limits?.max_W;
     }
 
-    mqttClient.publish(discoveryTopic, payload, true);
-  }
+    return { topic: discoveryTopic, payload };
+  });
 }
