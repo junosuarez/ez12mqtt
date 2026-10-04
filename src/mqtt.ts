@@ -1,7 +1,16 @@
 import * as mqtt from 'mqtt';
-import type { IClientOptions, MqttClient } from 'mqtt';
+import type { IClientOptions, MqttClient, MqttClientEventCallbacks } from 'mqtt';
 import config from './config.ts';
 import { logger } from './logger.ts';
+
+type ClientEvent = keyof MqttClientEventCallbacks;
+
+/** A listener held as closures, so the heterogeneous list needs no cast to replay onto a client. */
+interface Registration {
+  event: ClientEvent;
+  listener: unknown; // identity only, for removeListener
+  attach(client: MqttClient): void;
+}
 
 export class MQTTClient {
   private client: MqttClient | null = null;
@@ -16,7 +25,7 @@ export class MQTTClient {
   /** Listeners registered via on(), replayed onto the underlying client when connect() creates it.
    * main() registers its 'connect' and 'message' handlers before calling connect(), and forwarding
    * to a client that doesn't exist yet silently dropped them. */
-  private readonly listeners: Array<[event: string, listener: (...args: any[]) => void]> = [];
+  private readonly listeners: Registration[] = [];
 
   private readonly connectFn: typeof mqtt.connect;
 
@@ -94,29 +103,23 @@ export class MQTTClient {
       });
 
       // After our own handlers, so e.g. disconnectedSince is already cleared when callers see 'connect'.
-      for (const [event, listener] of this.listeners) {
-        this.client.on(event as any, listener as any);
+      for (const registration of this.listeners) {
+        registration.attach(this.client);
       }
     });
   }
 
-  // Derived from the client's own event map: mqtt v5 types its emitter against a fixed set,
-  // so a typo'd event name is a compile error rather than a listener that never fires.
-  public on<E extends Parameters<MqttClient['on']>[0]>(
-    event: E,
-    listener: (...args: any[]) => void,
-  ): void {
-    this.listeners.push([event, listener]);
-    this.client?.on(event, listener as any);
+  // Typed against the client's own event map: a typo'd event name, or a listener whose
+  // parameters don't match what that event emits, is a compile error.
+  public on<E extends ClientEvent>(event: E, listener: MqttClientEventCallbacks[E]): void {
+    this.listeners.push({ event, listener, attach: (client) => client.on(event, listener) });
+    this.client?.on(event, listener);
   }
 
-  public removeListener<E extends Parameters<MqttClient['removeListener']>[0]>(
-    event: E,
-    listener: (...args: any[]) => void,
-  ): void {
-    const i = this.listeners.findIndex(([e, l]) => e === event && l === listener);
+  public removeListener<E extends ClientEvent>(event: E, listener: MqttClientEventCallbacks[E]): void {
+    const i = this.listeners.findIndex((r) => r.event === event && r.listener === listener);
     if (i !== -1) this.listeners.splice(i, 1);
-    this.client?.removeListener(event, listener as any);
+    this.client?.removeListener(event, listener);
   }
 
   public subscribe(topic: string): void {

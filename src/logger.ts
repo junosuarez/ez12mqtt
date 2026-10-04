@@ -6,7 +6,7 @@ interface LogEntry {
   timestamp: string;
   level: Lowercase<LogLevel>;
   message: string;
-  [key: string]: any; // Allow arbitrary additional properties
+  [key: string]: unknown; // Allow arbitrary additional properties
 }
 
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
@@ -22,7 +22,9 @@ export function setLogLevel(level: LogLevel): void {
   currentLogLevel = level;
 }
 
-function log(level: LogLevel, message: string, context?: Record<string, any>): void {
+type LogContext = Record<string, unknown>;
+
+function log(level: LogLevel, message: string, context?: LogContext): void {
   if (LOG_LEVEL_ORDER[level] < LOG_LEVEL_ORDER[currentLogLevel]) {
     return;
   }
@@ -39,11 +41,11 @@ function log(level: LogLevel, message: string, context?: Record<string, any>): v
   };
 
   // Use inspect to handle circular references in context objects
-  console.log(JSON.stringify(entry, (key, value) => {
+  console.log(JSON.stringify(entry, (key, value: unknown): unknown => {
     if (typeof value === 'object' && value !== null) {
       // Detect circular references
       const cache = new Set();
-      return JSON.parse(JSON.stringify(value, (k, v) => {
+      return JSON.parse(JSON.stringify(value, (k, v: unknown): unknown => {
         if (typeof v === 'object' && v !== null) {
           if (cache.has(v)) {
             // Circular reference found, discard key
@@ -53,15 +55,20 @@ function log(level: LogLevel, message: string, context?: Record<string, any>): v
           cache.add(v);
         }
         return v;
-      }));
+      })) as unknown;
     }
     return value;
   }));
 }
 
 export const logger = {
-  debug: (message: string, context?: Record<string, any>) => log('DEBUG', message, context),
-  info: (message: string, context?: Record<string, any>) => log('INFO', message, context),
-  warn: (message: string, context?: Record<string, any>) => log('WARN', message, context),
-  error: (message: string, context?: Record<string, any>) => log('ERROR', message, context),
+  debug: (message: string, context?: LogContext) => log('DEBUG', message, context),
+  info: (message: string, context?: LogContext) => log('INFO', message, context),
+  warn: (message: string, context?: LogContext) => log('WARN', message, context),
+  error: (message: string, context?: LogContext) => log('ERROR', message, context),
 };
+
+/** For logging a caught value, which TypeScript rightly types as unknown: anything can be thrown. */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

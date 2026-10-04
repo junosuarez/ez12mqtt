@@ -1,6 +1,6 @@
-import axios from 'axios';
+import axios, { isAxiosError } from 'axios';
 import type { AxiosInstance } from 'axios';
-import { logger } from './logger.ts';
+import { errorMessage, logger } from './logger.ts';
 
 interface ApiResponse<T> {
   data: T;
@@ -8,7 +8,7 @@ interface ApiResponse<T> {
   deviceId: string;
 }
 
-interface DeviceInfo {
+export interface DeviceInfo {
   deviceId: string;
   devVer: string;
   ssid: string;
@@ -17,7 +17,7 @@ interface DeviceInfo {
   maxPower: string;
 }
 
-interface OutputData {
+export interface OutputData {
   p1: number;
   e1: number;
   te1: number;
@@ -26,11 +26,11 @@ interface OutputData {
   te2: number;
 }
 
-interface MaxPower {
+export interface MaxPower {
   power: string;
 }
 
-interface AlarmInfo {
+export interface AlarmInfo {
   og: string;
   isce1: string;
   isce2: string;
@@ -63,8 +63,12 @@ export class EZ1API {
         logger.warn(`API call to ${this.ip}${endpoint} returned non-success message: ${response.data.message}`);
         return null;
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       const responseTime = Date.now() - requestStartTime;
+      if (!isAxiosError(error)) {
+        logger.error(`Error fetching data from ${this.ip}${endpoint}: ${errorMessage(error)}`);
+        return null;
+      }
       if (error.response) {
         logger.info(`API Error Response - URL: ${url}, Time: ${responseTime}ms, Status: ${error.response.status}, Body: ${JSON.stringify(error.response.data)}`);
       } else if (error.request) {

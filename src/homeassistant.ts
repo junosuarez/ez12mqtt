@@ -16,6 +16,28 @@ interface ComponentDef {
   mode?: string;
 }
 
+/** The subset of Home Assistant's MQTT discovery schema this bridge emits. */
+interface DiscoveryPayload {
+  name: string;
+  unique_id: string;
+  device: { identifiers: string[]; name: string; model: string; manufacturer: string };
+  value_template: string;
+  availability_topic?: string;
+  payload_available?: string;
+  payload_not_available?: string;
+  state_topic?: string;
+  unit_of_measurement?: string;
+  device_class?: string;
+  state_class?: string;
+  payload_on?: boolean;
+  payload_off?: boolean;
+  command_topic?: string;
+  command_template?: string;
+  mode?: string;
+  min?: number;
+  max?: number;
+}
+
 const components: Record<string, ComponentDef> = {
   channel1Power_W: { name: 'Channel 1 Power', type: 'sensor', device_class: 'power', state_class: 'measurement', unit: 'W' },
   channel1EnergySinceStartup_kWh: { name: 'Channel 1 Energy Since Startup', type: 'sensor', device_class: 'energy', state_class: 'total_increasing', unit: 'kWh' },
@@ -52,10 +74,11 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
   for (const [key, component] of Object.entries(components)) {
     const discoveryTopic = `${config.homeAssistantDiscoveryPrefix}/${component.type}/${deviceState.deviceId}/${key}/config`;
 
-    const payload: any = {
+    const payload: DiscoveryPayload = {
       name: component.name,
       unique_id: `${deviceState.deviceId}_${key}`,
       device: device,
+      value_template: component.value_template || `{{ value_json.${key} }}`,
     };
 
     if (component.subtopic !== 'energy') {
@@ -67,12 +90,6 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
     const subtopic = component.subtopic || 'status';
     if (component.type !== 'number') {
       payload.state_topic = `${config.mqttBaseTopic}/${deviceState.mqttTopic}/${subtopic}`;
-    }
-
-    if (component.value_template) {
-      payload.value_template = component.value_template;
-    } else {
-      payload.value_template = `{{ value_json.${key} }}`;
     }
 
     if (component.type === 'sensor') {
@@ -94,8 +111,8 @@ export function publishDiscoveryMessages(deviceState: DeviceState, mqttClient: M
       // Note: Home Assistant's MQTT discovery for numbers uses `min` and `max`,
       // which differs from the `native_min_value` and `native_max_value` properties
       // used in the core entity model.
-      payload.min = parseFloat(deviceState.minPower as any);
-      payload.max = parseFloat(deviceState.maxPower as any);
+      payload.min = deviceState.minPower;
+      payload.max = deviceState.maxPower;
     }
 
     mqttClient.publish(discoveryTopic, payload, true);

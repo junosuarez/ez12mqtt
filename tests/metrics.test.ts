@@ -8,6 +8,7 @@ process.env.DEVICE_1_NICKNAME ??= 'test-inverter';
 
 const { counters, deviceOnline, metricsText, recordDeviceOnline, recordPollError, recordPollSuccess, MQTT_HEALTHY_GRACE_MS } =
   await import('../src/metrics.ts');
+type MetricSources = Parameters<typeof metricsText>[0];
 
 function parse(text: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -19,8 +20,9 @@ function parse(text: string): Map<string, string> {
   return out;
 }
 
-const sources = (over: Partial<Parameters<typeof metricsText>[0]> = {}) => ({
+const sources = (over: Partial<MetricSources> = {}): MetricSources => ({
   mqttConnected: () => true,
+  mqttDisconnectedForMs: () => 0,
   pollingExpected: () => true,
   sunElevationDeg: () => 12.5,
   ...over,
@@ -128,7 +130,7 @@ describe('metrics endpoint is opt-in', () => {
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       env, encoding: 'utf8', cwd: new URL('..', import.meta.url).pathname,
     });
-    return JSON.parse(out.trim().split('\n').filter((l) => l.startsWith('{')).pop()!);
+    return JSON.parse(out.trim().split('\n').filter((l) => l.startsWith('{')).pop()!) as { listening: boolean };
   }
 
   it('creates no listener when METRICS_PORT is unset — the outbound-only default', async () => {
@@ -163,7 +165,7 @@ describe('/healthz — the signal k8s liveness/readiness key off', () => {
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       env, encoding: 'utf8', cwd: new URL('..', import.meta.url).pathname,
     });
-    return JSON.parse(out.trim().split('\n').filter((l) => l.startsWith('{')).pop()!);
+    return JSON.parse(out.trim().split('\n').filter((l) => l.startsWith('{')).pop()!) as { status: number; body: string };
   }
 
   it('is healthy while within the grace period', async () => {
