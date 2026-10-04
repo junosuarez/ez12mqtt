@@ -169,7 +169,7 @@ A `Dockerfile` will be created for the `ez12mqtt` application. It will use a Nod
 
 1.  **Project Initialization:**
     *   `npm init -y`
-    *   `npm install mqtt axios dotenv typescript @types/node`
+    *   `npm install mqtt axios typescript @types/node`
     *   Create `tsconfig.json`.
     *   Create project structure: `src/`, `tests/`.
     *   Create `.gitignore`.
