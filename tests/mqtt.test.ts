@@ -106,3 +106,42 @@ describe('MQTTClient listeners — main() registers them before connect()', () =
     assert.equal(onMessage.mock.calls.length, 0);
   });
 });
+
+describe('brokerConnection — TLS (#23)', async () => {
+  const { brokerConnection } = await import('../src/mqtt.ts');
+  const settings = { mqttHost: 'broker', mqttPort: 8883, mqttBaseTopic: 'ez12mqtt', mqttUser: undefined, mqttPassword: undefined };
+
+  it('uses plain mqtt:// with no TLS options when TLS is off', () => {
+    const { url, options } = brokerConnection({ ...settings, mqttPort: 1883, mqttTls: undefined });
+    assert.equal(url, 'mqtt://broker:1883');
+    assert.equal(options.rejectUnauthorized, undefined);
+    assert.equal(options.ca, undefined);
+  });
+
+  it('uses mqtts:// with verification on and the configured CA and client certificate', () => {
+    const { url, options } = brokerConnection({ ...settings, mqttTls: { ca: 'CA', cert: 'CERT', key: 'KEY' } });
+    assert.equal(url, 'mqtts://broker:8883');
+    assert.equal(options.rejectUnauthorized, true);
+    assert.deepEqual([options.ca, options.cert, options.key], ['CA', 'CERT', 'KEY']);
+  });
+
+  it('turns verification off only for skipVerify', () => {
+    assert.equal(brokerConnection({ ...settings, mqttTls: { skipVerify: true } }).options.rejectUnauthorized, false);
+  });
+
+  it('hints at the right fix for the failures TLS-by-default makes likely', async () => {
+    const { connectionHint } = await import('../src/mqtt.ts');
+    assert.match(connectionHint('mqtts://broker:8883', 'ECONNREFUSED') ?? '', /MQTT_INSECURE=true/);
+    assert.match(connectionHint('mqtts://broker:1883', 'ECONNRESET') ?? '', /MQTT_INSECURE=true/);
+    assert.match(connectionHint('mqtts://broker:8883', 'DEPTH_ZERO_SELF_SIGNED_CERT') ?? '', /MQTT_CA_FILE/);
+    assert.match(connectionHint('mqtts://broker:8883', 'SELF_SIGNED_CERT_IN_CHAIN') ?? '', /MQTT_CA_FILE/);
+    assert.equal(connectionHint('mqtt://broker:1883', 'ECONNREFUSED'), null, 'already plain: nothing TLS-specific to suggest');
+    assert.equal(connectionHint('mqtts://broker:8883', 'ENOTFOUND'), null, 'not a TLS problem');
+  });
+
+  it('keeps verification on even with no CA file (the system trust store applies)', () => {
+    const { options } = brokerConnection({ ...settings, mqttTls: {} });
+    assert.equal(options.rejectUnauthorized, true);
+    assert.equal(options.ca, undefined);
+  });
+});

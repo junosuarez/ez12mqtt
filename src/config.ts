@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { logger, setLogLevel } from './logger.ts';
 
 interface DeviceConfig {
@@ -6,10 +7,24 @@ interface DeviceConfig {
   description?: string;
 }
 
+/** Contents, not paths: the files are read at startup so a bad path fails there, not at connect. */
+export interface MqttTls {
+  /** PEM CA bundle for a broker with a private CA, or a self-signed broker certificate itself;
+   * absent means the system's trusted CAs. */
+  ca?: string;
+  /** PEM client certificate and key, for brokers that require mutual TLS. Both or neither. */
+  cert?: string;
+  key?: string;
+  /** MQTT_TLS_SKIP_VERIFY: encrypt, but accept any certificate. Explicit opt-in only. */
+  skipVerify?: boolean;
+}
+
 interface Config {
   devices: DeviceConfig[];
   mqttHost: string;
   mqttPort: number;
+  /** TLS settings; absent only when MQTT_INSECURE=true asked for plain mqtt://. */
+  mqttTls?: MqttTls;
   mqttUser?: string;
   mqttPassword?: string;
   mqttBaseTopic: string;
@@ -188,10 +203,56 @@ function parseLogLevel(env: Env, errors: string[]): 'INFO' | 'DEBUG' {
   return 'INFO';
 }
 
-/** Pure: reads only `env`, never exits or logs, so every rule here is unit-testable. */
-export function parseConfig(env: Env): ParsedConfig {
+// ---- TLS ---------------------------------------------------------------------------------------
+
+const TLS_FILES = [['MQTT_CA_FILE', 'ca'], ['MQTT_CERT_FILE', 'cert'], ['MQTT_KEY_FILE', 'key']] as const;
+
+export type ReadFile = (path: string) => string;
+const readUtf8: ReadFile = (path) => readFileSync(path, 'utf8');
+
+/**
+ * TLS is the default; plain mqtt:// needs MQTT_INSECURE=true. Returns undefined only in that case.
+ * Verification is on unless MQTT_TLS_SKIP_VERIFY=true. For a self-signed broker the better route is
+ * MQTT_CA_FILE pointing at its certificate, which keeps the connection authenticated.
+ */
+function parseTls(env: Env, readFile: ReadFile, errors: string[], warnings: string[]): MqttTls | undefined {
+  const insecure = boolean(env, 'MQTT_INSECURE', errors);
+  const skipVerify = boolean(env, 'MQTT_TLS_SKIP_VERIFY', errors);
+  const paths = TLS_FILES.filter(([name]) => env[name]?.trim());
+  if (insecure) {
+    // Contradictory settings: one of them is a mistake, and guessing which could mean cleartext.
+    const tlsSettings = [...paths.map(([name]) => name), ...(skipVerify ? ['MQTT_TLS_SKIP_VERIFY'] : [])];
+    if (tlsSettings.length > 0) errors.push(`MQTT_INSECURE=true turns TLS off, so ${tlsSettings.join(', ')} can't apply; unset one or the other.`);
+    return undefined;
+  }
+  if (skipVerify && env.MQTT_CA_FILE?.trim()) {
+    errors.push('MQTT_TLS_SKIP_VERIFY=true ignores MQTT_CA_FILE; for a self-signed broker, set only MQTT_CA_FILE (to its certificate).');
+  }
+  if (!!env.MQTT_CERT_FILE?.trim() !== !!env.MQTT_KEY_FILE?.trim()) {
+    errors.push('MQTT_CERT_FILE and MQTT_KEY_FILE must be set together (client certificate and its key).');
+  }
+  if (skipVerify) {
+    warnings.push('MQTT_TLS_SKIP_VERIFY=true: the broker\'s certificate is not verified, so the connection is encrypted but anyone in the path can impersonate the broker. Prefer MQTT_CA_FILE.');
+  }
+  const tls: MqttTls = skipVerify ? { skipVerify } : {};
+  for (const [name, field] of paths) {
+    const path = env[name]!.trim();
+    try {
+      tls[field] = readFile(path);
+    } catch (error: unknown) {
+      const reason = error instanceof Error && 'code' in error ? String(error.code) : String(error);
+      errors.push(`${name} could not be read from "${path}" (${reason}).`);
+    }
+  }
+  return tls;
+}
+
+/** Pure apart from `readFile` (injectable for tests): never exits or logs, so every rule here is
+ * unit-testable. */
+export function parseConfig(env: Env, readFile: ReadFile = readUtf8): ParsedConfig {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const mqttTls = parseTls(env, readFile, errors, warnings);
 
   const mqttBaseTopic = env.MQTT_BASE_TOPIC?.trim() || 'ez12mqtt';
   const homeAssistantDiscoveryPrefix = env.HOMEASSISTANT_DISCOVERY_PREFIX?.trim() || 'homeassistant';
@@ -203,7 +264,9 @@ export function parseConfig(env: Env): ParsedConfig {
   const config: Config = {
     devices: parseDevices(env, errors),
     mqttHost: env.MQTT_HOST?.trim() || 'localhost',
-    mqttPort: integer(env, 'MQTT_PORT', 1883, 1, 65535, errors)!,
+    // 8883 is MQTT-over-TLS's registered port, as 1883 is plain MQTT's.
+    mqttPort: integer(env, 'MQTT_PORT', mqttTls ? 8883 : 1883, 1, 65535, errors)!,
+    ...(mqttTls && { mqttTls }),
     mqttUser: env.MQTT_USER,
     mqttPassword: env.MQTT_PASSWORD,
     mqttBaseTopic,
