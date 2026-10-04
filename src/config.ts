@@ -36,133 +36,198 @@ interface Config {
   metricsPort?: number;
 }
 
-function validateConfig(config: Partial<Config>): Config {
-  const errors: string[] = [];
+type Env = Record<string, string | undefined>;
 
-  if (!config.devices || config.devices.length === 0) {
-    errors.push('At least one device must be configured using DEVICE_n_IP.');
-  }
-
-  if (!config.mqttHost) {
-    errors.push('MQTT_HOST is required.');
-  }
-
-  if (!config.mqttPort || isNaN(config.mqttPort)) {
-    errors.push('MQTT_PORT is required and must be a number.');
-  }
-
-  if (!config.mqttBaseTopic) {
-    errors.push('MQTT_BASE_TOPIC is required.');
-  }
-
-  if (!config.pollInterval || isNaN(config.pollInterval) || config.pollInterval <= 0) {
-    errors.push('POLL_INTERVAL is required and must be a positive number.');
-  }
-
-  // Only validated when present: absent is the documented "off" state, but a typo'd port should
-  // fail at startup rather than silently leave metrics disabled and be discovered months later.
-  if (config.metricsPort !== undefined) {
-    if (isNaN(config.metricsPort) || config.metricsPort < 1 || config.metricsPort > 65535) {
-      errors.push('METRICS_PORT must be a port number between 1 and 65535 when set.');
-    }
-  }
-
-  if (errors.length > 0) {
-    errors.forEach(error => logger.error(error));
-    process.exit(1);
-  }
-
-  return config as Config;
+export interface ParsedConfig {
+  config: Config;
+  /** Fatal: the process logs these and exits rather than run on a config it misread. */
+  errors: string[];
+  warnings: string[];
 }
 
-function parseDevices(): DeviceConfig[] {
-  const devices: DeviceConfig[] = [];
-  let i = 1;
-  while (process.env[`DEVICE_${i}_IP`]) {
-    const ip = process.env[`DEVICE_${i}_IP`] as string;
-    const nickname = process.env[`DEVICE_${i}_NICKNAME`];
-    const description = process.env[`DEVICE_${i}_DESCRIPTION`];
+// ---- strict scalar parsing ---------------------------------------------------------------------
+// parseInt/parseFloat read a prefix and ignore the rest, so `POLL_INTERVAL=30s` used to mean 30 and
+// `SUN_ELEVATION_THRESHOLD=abc` meant NaN — which compared false against every elevation and so
+// silently skipped every poll, day and night. Every number is now all-or-nothing.
 
-    if (!ip) {
-      logger.error(`DEVICE_${i}_IP is defined but empty. Skipping device ${i}.`);
-      i++;
-      continue;
-    }
+const INTEGER = /^-?\d+$/;
+const DECIMAL = /^-?\d+(\.\d+)?$/;
 
-    devices.push({
-      ip,
-      ...(nickname && { nickname }),
-      ...(description && { description }),
-    });
-    i++;
+/** Unset or blank → the default; anything else must be a whole number in range, or it's an error. */
+function integer(env: Env, name: string, fallback: number | undefined, min: number, max: number, errors: string[]): number | undefined {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!INTEGER.test(raw) || n < min || n > max) {
+    errors.push(`${name} must be a whole number from ${min} to ${max}; got "${raw}".`);
+    return fallback;
   }
+  return n;
+}
+
+function decimal(env: Env, name: string, fallback: number, min: number, max: number, errors: string[]): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!DECIMAL.test(raw) || n < min || n > max) {
+    errors.push(`${name} must be a number from ${min} to ${max}; got "${raw}".`);
+    return fallback;
+  }
+  return n;
+}
+
+/** `true`/`false` in any case; unset is false. `HOMEASSISTANT_ENABLE=1` used to silently mean off. */
+function boolean(env: Env, name: string, errors: string[]): boolean {
+  const raw = env[name]?.trim().toLowerCase();
+  if (!raw || raw === 'false') return false;
+  if (raw === 'true') return true;
+  errors.push(`${name} must be "true" or "false"; got "${env[name]}".`);
+  return false;
+}
+
+// ---- topics -----------------------------------------------------------------------------------
+
+/**
+ * A topic (or prefix) we publish under and subscribe beneath. MQTT reserves `+` and `#` as
+ * wildcards and `$` as a leading character, and an empty level (`a//b`) is almost always a typo —
+ * any of these would leave subscriptions silently matching nothing, or the wrong things.
+ */
+function topicError(name: string, value: string): string | null {
+  if (/[+#\u0000]/.test(value)) return `${name} must not contain "+", "#" or NUL; got "${value}".`;
+  if (value.startsWith('$')) return `${name} must not start with "$" (reserved for broker topics); got "${value}".`;
+  if (value.split('/').some((level) => level === '')) return `${name} must not start or end with "/" or contain "//"; got "${value}".`;
+  return null;
+}
+
+// ---- sections ---------------------------------------------------------------------------------
+
+/** Hostname or IPv4 only: EZ1API builds `http://<ip>:8050`, so a scheme, port or path here breaks it. */
+const HOST = /^[A-Za-z0-9.-]+$/;
+
+function parseDevices(env: Env, errors: string[]): DeviceConfig[] {
+  const devices: DeviceConfig[] = [];
+  for (let i = 1; env[`DEVICE_${i}_IP`]?.trim(); i++) {
+    const ip = env[`DEVICE_${i}_IP`]!.trim();
+    const nickname = env[`DEVICE_${i}_NICKNAME`]?.trim() || undefined;
+    const description = env[`DEVICE_${i}_DESCRIPTION`];
+    if (!HOST.test(ip)) errors.push(`DEVICE_${i}_IP must be a hostname or IPv4 address, without scheme or port; got "${ip}".`);
+    // A nickname is a single topic level: `<base>/<nickname>/status`.
+    if (nickname) {
+      const problem = nickname.includes('/') ? `DEVICE_${i}_NICKNAME must not contain "/"; got "${nickname}".` : topicError(`DEVICE_${i}_NICKNAME`, nickname);
+      if (problem) errors.push(problem);
+    }
+    devices.push({ ip, ...(nickname && { nickname }), ...(description && { description }) });
+  }
+
+  // Numbering stops at the first gap, so a DEVICE_3_* with no DEVICE_2_IP used to be silently ignored.
+  const configured = new Set(devices.map((_, i) => String(i + 1)));
+  const stray = Object.keys(env)
+    .map((key) => /^DEVICE_(\d+)_(IP|NICKNAME|DESCRIPTION)$/.exec(key))
+    .filter((m): m is RegExpExecArray => m !== null && !configured.has(m[1]) && !!env[m[0]]?.trim())
+    .map((m) => m[0])
+    .sort();
+  if (stray.length > 0) {
+    errors.push(`${stray.join(', ')} would be ignored: devices are numbered DEVICE_1_IP, DEVICE_2_IP, … with no gaps, and each needs an IP.`);
+  }
+
+  const seen = (values: (string | undefined)[], what: string) => {
+    const dupes = values.filter((v, i) => v !== undefined && values.indexOf(v) !== i);
+    if (dupes.length > 0) errors.push(`Two devices share ${what} "${dupes[0]}"; each must be unique.`);
+  };
+  seen(devices.map((d) => d.ip), 'the IP');
+  seen(devices.map((d) => d.nickname), 'the nickname');
+
+  if (devices.length === 0) errors.push('At least one device must be configured using DEVICE_n_IP.');
   return devices;
 }
 
-/** Both or neither: a half-set location would silently compute the wrong solar position. */
-function parseLocation(): { latitude?: number; longitude?: number } {
-  const rawLat = process.env.LATITUDE;
-  const rawLon = process.env.LONGITUDE;
+/** Both or neither: a half-set location would silently compute the wrong solar position. Invalid
+ * values disable the sun features with a warning rather than failing, as before. */
+function parseLocation(env: Env, warnings: string[]): { latitude?: number; longitude?: number } {
+  const rawLat = env.LATITUDE?.trim();
+  const rawLon = env.LONGITUDE?.trim();
   if (!rawLat && !rawLon) return {};
 
   if (!rawLat || !rawLon) {
-    logger.warn('Only one of LATITUDE/LONGITUDE is set — both are required. Sun features disabled.');
+    warnings.push('Only one of LATITUDE/LONGITUDE is set — both are required. Sun features disabled.');
     return {};
   }
 
-  const latitude = parseFloat(rawLat);
-  const longitude = parseFloat(rawLon);
-  if (isNaN(latitude) || latitude < -90 || latitude > 90) {
-    logger.warn(`LATITUDE ${rawLat} is not a number in [-90, 90]. Sun features disabled.`);
+  const latitude = Number(rawLat);
+  const longitude = Number(rawLon);
+  if (!DECIMAL.test(rawLat) || latitude < -90 || latitude > 90) {
+    warnings.push(`LATITUDE ${rawLat} is not a number in [-90, 90]. Sun features disabled.`);
     return {};
   }
-  if (isNaN(longitude) || longitude < -180 || longitude > 180) {
-    logger.warn(`LONGITUDE ${rawLon} is not a number in [-180, 180]. Sun features disabled.`);
+  if (!DECIMAL.test(rawLon) || longitude < -180 || longitude > 180) {
+    warnings.push(`LONGITUDE ${rawLon} is not a number in [-180, 180]. Sun features disabled.`);
     return {};
   }
   return { latitude, longitude };
 }
 
-function parseSunNowOverride(): Date | undefined {
-  const raw = process.env.SUN_NOW_OVERRIDE;
+function parseSunNowOverride(env: Env, errors: string[], warnings: string[]): Date | undefined {
+  const raw = env.SUN_NOW_OVERRIDE?.trim();
   if (!raw) return undefined;
 
   const date = new Date(raw);
   if (isNaN(date.getTime())) {
-    logger.error(`SUN_NOW_OVERRIDE ${raw} is not a valid date. Ignoring.`);
+    errors.push(`SUN_NOW_OVERRIDE must be a date; got "${raw}".`);
     return undefined;
   }
   // Loud on purpose: this freezes the sun and must never go unnoticed outside a test.
-  logger.warn(`SUN_NOW_OVERRIDE is set — solar position is pinned to ${date.toISOString()}. Test use only.`);
+  warnings.push(`SUN_NOW_OVERRIDE is set — solar position is pinned to ${date.toISOString()}. Test use only.`);
   return date;
 }
 
-/** Undefined (not a default port) when unset or blank — that is how the endpoint stays off. */
-function parseMetricsPort(): number | undefined {
-  const raw = process.env.METRICS_PORT?.trim();
-  if (!raw) return undefined;
-  return parseInt(raw, 10);
+function parseLogLevel(env: Env, errors: string[]): 'INFO' | 'DEBUG' {
+  const raw = env.LOG_LEVEL?.trim().toUpperCase();
+  if (!raw || raw === 'INFO') return 'INFO';
+  if (raw === 'DEBUG') return 'DEBUG';
+  errors.push(`LOG_LEVEL must be INFO or DEBUG; got "${env.LOG_LEVEL}".`);
+  return 'INFO';
 }
 
-const rawLogLevel = process.env.LOG_LEVEL?.toUpperCase();
-const logLevel: 'INFO' | 'DEBUG' = (rawLogLevel === 'DEBUG' ? 'DEBUG' : 'INFO');
-setLogLevel(logLevel);
+/** Pure: reads only `env`, never exits or logs, so every rule here is unit-testable. */
+export function parseConfig(env: Env): ParsedConfig {
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
-const config: Config = validateConfig({
-  devices: parseDevices(),
-  mqttHost: process.env.MQTT_HOST || 'localhost',
-  mqttPort: parseInt(process.env.MQTT_PORT || '1883', 10),
-  mqttUser: process.env.MQTT_USER,
-  mqttPassword: process.env.MQTT_PASSWORD,
-  mqttBaseTopic: process.env.MQTT_BASE_TOPIC || 'ez12mqtt',
-  pollInterval: parseInt(process.env.POLL_INTERVAL || '30', 10),
-  logLevel: logLevel,
-  homeAssistantEnable: process.env.HOMEASSISTANT_ENABLE === 'true',
-  homeAssistantDiscoveryPrefix: process.env.HOMEASSISTANT_DISCOVERY_PREFIX || 'homeassistant',
-  ...parseLocation(),
-  sunElevationThreshold: parseFloat(process.env.SUN_ELEVATION_THRESHOLD || '-6'),
-  sunNowOverride: parseSunNowOverride(),
-  metricsPort: parseMetricsPort(),
-});
+  const mqttBaseTopic = env.MQTT_BASE_TOPIC?.trim() || 'ez12mqtt';
+  const homeAssistantDiscoveryPrefix = env.HOMEASSISTANT_DISCOVERY_PREFIX?.trim() || 'homeassistant';
+  for (const [name, value] of [['MQTT_BASE_TOPIC', mqttBaseTopic], ['HOMEASSISTANT_DISCOVERY_PREFIX', homeAssistantDiscoveryPrefix]]) {
+    const problem = topicError(name, value);
+    if (problem) errors.push(problem);
+  }
+
+  const config: Config = {
+    devices: parseDevices(env, errors),
+    mqttHost: env.MQTT_HOST?.trim() || 'localhost',
+    mqttPort: integer(env, 'MQTT_PORT', 1883, 1, 65535, errors)!,
+    mqttUser: env.MQTT_USER,
+    mqttPassword: env.MQTT_PASSWORD,
+    mqttBaseTopic,
+    pollInterval: integer(env, 'POLL_INTERVAL', 30, 1, 86400, errors)!,
+    logLevel: parseLogLevel(env, errors),
+    homeAssistantEnable: boolean(env, 'HOMEASSISTANT_ENABLE', errors),
+    homeAssistantDiscoveryPrefix,
+    ...parseLocation(env, warnings),
+    sunElevationThreshold: decimal(env, 'SUN_ELEVATION_THRESHOLD', -6, -90, 90, errors),
+    sunNowOverride: parseSunNowOverride(env, errors, warnings),
+    // Unset or blank is the documented "off"; a set-but-bad port fails rather than silently leave
+    // metrics disabled and be discovered months later.
+    metricsPort: integer(env, 'METRICS_PORT', undefined, 1, 65535, errors),
+  };
+
+  return { config, errors, warnings };
+}
+
+const { config, errors, warnings } = parseConfig(process.env);
+setLogLevel(config.logLevel);
+warnings.forEach((warning) => logger.warn(warning));
+if (errors.length > 0) {
+  errors.forEach((error) => logger.error(error));
+  process.exit(1);
+}
 
 export default config;

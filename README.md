@@ -98,19 +98,19 @@ services:
 
 ## Configuration
 
-`ez12mqtt` is configured using environment variables. Below is a list of available environment variables:
+`ez12mqtt` is configured using environment variables. Below is a list of available environment variables. Values are checked at startup: a malformed one (e.g. `POLL_INTERVAL=30s`, `HOMEASSISTANT_ENABLE=1`) stops the bridge with an error naming the variable, rather than being misread.
 
 | Environment Variable     | Description                                                                                  | Default     |
 | :----------------------- | :------------------------------------------------------------------------------------------- | :---------- |
-| `DEVICE_{n}_IP`          | The IP address of the {n}th device (1-based index).                                          | (Required)  |
-| `DEVICE_{n}_NICKNAME`    | The nickname of the {n}th device. This will be used in the MQTT topic.                       |             |
+| `DEVICE_{n}_IP`          | The IP address or hostname of the {n}th device (1-based, no gaps; no scheme or port).        | (Required)  |
+| `DEVICE_{n}_NICKNAME`    | The nickname of the {n}th device, used as its MQTT topic level. Unique; no `/`, `+` or `#`.  |             |
 | `DEVICE_{n}_DESCRIPTION` | The description of the {n}th device.                                                         |             |
 | `MQTT_HOST`              | The hostname or IP address of the MQTT broker.                                               | `localhost` |
 | `MQTT_PORT`              | The port of the MQTT broker.                                                                 | `1883`      |
 | `MQTT_USER`              | The username for MQTT authentication.                                                        |             |
 | `MQTT_PASSWORD`          | The password for MQTT authentication.                                                        |             |
-| `MQTT_BASE_TOPIC`        | The base topic for all MQTT messages.                                                        | `ez12mqtt`  |
-| `POLL_INTERVAL`          | The interval in seconds to poll the fast-changing device data (`getOutputData`, `getAlarm`). | `30`        |
+| `MQTT_BASE_TOPIC`        | The base topic for all MQTT messages. May have levels (`home/solar`); no `+`, `#` or `//`.  | `ez12mqtt`  |
+| `POLL_INTERVAL`          | Whole seconds between polls of the fast-changing device data (`getOutputData`, `getAlarm`).  | `30`        |
 | `LOG_LEVEL`              | The log level for the application. Can be `INFO` or `DEBUG`.                                 | `INFO`      |
 | `LATITUDE`               | Latitude for solar position. Enables the sun features (with `LONGITUDE`).                    |             |
 | `LONGITUDE`              | Longitude for solar position. Enables the sun features (with `LATITUDE`).                    |             |
