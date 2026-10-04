@@ -66,7 +66,7 @@ The bridge's behaviour is a pure reducer, `reduce(state, event) → { state, eff
 
 ### 4.4. API Client
 
-*   A simple wrapper around an HTTP client library like `axios`.
+*   A thin wrapper around Node's built-in `fetch`, with a 5-second timeout per request.
 *   Will have methods for each API endpoint: `getDeviceInfo`, `getOutputData`, `getMaxPower`, `getAlarm`.
 *   It will handle the base URL and extract the `data` property from the response.
 
@@ -174,7 +174,7 @@ A `Dockerfile` will be created for the `ez12mqtt` application. It will use a Nod
 
 1.  **Project Initialization:**
     *   `npm init -y`
-    *   `npm install mqtt axios typescript @types/node`
+    *   `npm install mqtt typescript @types/node`
     *   Create `tsconfig.json`.
     *   Create project structure: `src/`, `tests/`.
     *   Create `.gitignore`.
