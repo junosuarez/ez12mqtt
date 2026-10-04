@@ -74,3 +74,33 @@ describe('MQTTClient reconnect — a failed first connect must not wedge the pro
     assert.equal(fake.end.mock.calls.length, 0);
   });
 });
+
+describe('MQTTClient listeners — main() registers them before connect()', () => {
+  it('delivers connect and message events to listeners registered before connect()', () => {
+    const { fake, client } = newClientWithFake();
+    const onConnect = mock.fn();
+    const onMessage = mock.fn();
+    client.on('connect', onConnect);
+    client.on('message', onMessage);
+
+    client.connect();
+    fake.connected = true;
+    fake.emit('connect');
+    fake.emit('message', 'ez12mqtt/x/maxPower_W/set', Buffer.from('600'));
+
+    assert.equal(onConnect.mock.calls.length, 1, 'connect listener registered before connect() must fire');
+    assert.equal(onMessage.mock.calls.length, 1, 'message listener registered before connect() must fire');
+  });
+
+  it('does not deliver to a listener removed before connect()', () => {
+    const { fake, client } = newClientWithFake();
+    const onMessage = mock.fn();
+    client.on('message', onMessage);
+    client.removeListener('message', onMessage);
+
+    client.connect();
+    fake.emit('message', 'ez12mqtt/x/info', Buffer.from('{}'));
+
+    assert.equal(onMessage.mock.calls.length, 0);
+  });
+});
