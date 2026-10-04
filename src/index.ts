@@ -49,8 +49,12 @@ async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
 
   if (deviceInfo) {
     deviceState.deviceId = deviceInfo.deviceId;
-    if (!deviceState.nickname) {
+    if (!deviceState.nickname && deviceState.mqttTopic !== deviceInfo.deviceId) {
       deviceState.mqttTopic = deviceInfo.deviceId;
+      // onMqttConnected could not subscribe for a topic it did not know yet.
+      if (config.homeAssistantEnable) {
+        mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
+      }
     }
 
     deviceState.minPower = parseFloat(deviceInfo.minPower);
@@ -133,7 +137,20 @@ async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | n
   }
   recordDeviceOnline(deviceState.nickname || deviceState.ip, deviceState.isOnline);
 
-  if (deviceState.isOnline !== wasOnline) {
+  // Without a nickname the topic is the device ID, which only getDeviceInfo can tell us. Learn it
+  // before publishing anything: availability is retained and only resent on an online-ness edge,
+  // so one written to `<base>//availability` leaves Home Assistant showing the device unavailable
+  // until the next sunrise. Retried every poll until it succeeds.
+  const hadTopic = !!deviceState.mqttTopic;
+  if (deviceState.isOnline && (!wasOnline || !hadTopic)) {
+    await fetchAndPublishInfo(deviceState);
+  }
+  if (!deviceState.mqttTopic) {
+    logger.debug(`Device ${deviceState.ip} has no topic yet (no nickname, device ID unknown) — not publishing.`);
+    return outputData;
+  }
+
+  if (deviceState.isOnline !== wasOnline || !hadTopic) {
     mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
   }
 
@@ -197,19 +214,18 @@ async function pollDevice(deviceState: DeviceState, sun: SunState | null = curre
   const wasOnline = deviceState.isOnline;
   const outputData = await fetchAndPublishStatus(deviceState, sun);
 
-  if (deviceState.isOnline) {
+  if (deviceState.isOnline && deviceState.mqttTopic) {
     await publishEnergyTopic(deviceState, outputData);
-    await fetchAndPublishMaxPower(deviceState);
-  }
-
-  if (deviceState.isOnline && !wasOnline) {
-    logger.info(`Device ${deviceState.ip} is now online. Fetching info.`);
-    await fetchAndPublishInfo(deviceState);
     await fetchAndPublishMaxPower(deviceState);
     if (config.homeAssistantEnable && !deviceState.discoveryPublished) {
       publishDiscoveryMessages(deviceState, mqttClient);
       deviceState.discoveryPublished = true;
     }
+  }
+
+  if (deviceState.isOnline && !wasOnline) {
+    // Info was already fetched by fetchAndPublishStatus, before anything was published.
+    logger.info(`Device ${deviceState.ip} is now online.`);
   } else if (!deviceState.isOnline && wasOnline) {
     // Going offline at dusk is expected; warning nightly trains you to ignore the warning.
     if (sun && !sun.isSunUp) {
@@ -234,9 +250,20 @@ async function restoreState(): Promise<void> {
 
       if (match) {
         const deviceTopic = match[1];
-        const deviceState = deviceStates.find(d => d.mqttTopic === deviceTopic || d.nickname === deviceTopic);
+        let payload: any;
+        try {
+          payload = JSON.parse(messageString);
+        } catch {
+          logger.warn(`Ignoring unparseable retained info on ${topic}`);
+          return;
+        }
+        // A nickname-less device's topic is its device ID, which is exactly what we're trying to
+        // restore — so until it's known, the only link to its retained info is the IP it reported.
+        const deviceState = deviceStates.find(d =>
+          d.mqttTopic === deviceTopic ||
+          d.nickname === deviceTopic ||
+          (!d.mqttTopic && payload.deviceIPAddress === d.ip));
         if (deviceState) {
-          const payload = JSON.parse(messageString);
           deviceState.deviceId = payload.deviceIdentifier;
           deviceState.minPower = payload.minimumPowerOutput_W;
           deviceState.maxPower = payload.maximumPowerOutput_W;
@@ -266,13 +293,18 @@ async function onMqttConnected(): Promise<void> {
   await restoreState();
 
   for (const deviceState of deviceStates) {
+    if (deviceState.isOnline) {
+      await fetchAndPublishInfo(deviceState);
+    }
+    // Still unknown: fetchAndPublishInfo subscribes once a later poll learns it.
+    if (!deviceState.mqttTopic) continue;
+
     if (config.homeAssistantEnable) {
       mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
     }
 
     if (deviceState.isOnline) {
       mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '1', true);
-      await fetchAndPublishInfo(deviceState);
       await fetchAndPublishMaxPower(deviceState);
       if (config.homeAssistantEnable) {
         publishDiscoveryMessages(deviceState, mqttClient);
@@ -355,7 +387,7 @@ function shutdown() {
   logger.info('Shutting down...');
   metricsServer?.close();
   for (const deviceState of deviceStates) {
-    if (deviceState.isOnline) {
+    if (deviceState.isOnline && deviceState.mqttTopic) {
       mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '0', true);
     }
   }
