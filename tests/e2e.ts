@@ -9,10 +9,13 @@ const ASSERTION_TIMEOUT = 60 * 1000;
 
 const MQTT_BASE_TOPIC = 'ez12mqtt_test';
 const DEVICE_NICKNAME = 'mock_inverter';
+const MOCK_DEVICE_ID = 'E28000000238';
 const OFFLINE_DEVICE_NICKNAME = 'offline_inverter';
 const HOMEASSISTANT_DISCOVERY_PREFIX = 'homeassistant';
 
 const logOnPass = process.argv.includes('--log-on-pass');
+// `--only=<text>` runs just the scenarios whose name contains <text> (case-insensitive).
+const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length).toLowerCase();
 
 /** The discovery fields the assertions below read back. */
 interface DiscoveryMessage {
@@ -34,9 +37,19 @@ interface TestOptions {
   expectPollSkipped?: boolean;
   // A sleeping inverter never comes online, so the online-path assertions cannot apply.
   onlySunAssertions?: boolean;
+  // Device 1 configured without DEVICE_1_NICKNAME: its topic is then the device ID, learned from the
+  // inverter. Also asserts nothing is ever published to `<base>//…` (#9).
+  nicknameless?: boolean;
 }
 
+/** Device 1's topic level: its nickname, or its device ID when it has none. */
+const deviceTopicOf = (options: TestOptions) => (options.nicknameless ? MOCK_DEVICE_ID : DEVICE_NICKNAME);
+
 async function runTest(options: TestOptions, logOnPass: boolean) {
+  if (only && !options.testName.toLowerCase().includes(only)) {
+    logger.info(`--- Skipping test: ${options.testName} (--only=${only}) ---`);
+    return;
+  }
   logger.info(`--- Running test: ${options.testName} ---`);
 
   const network = await new Network().start();
@@ -114,7 +127,7 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
       MQTT_HOST: 'mqtt-broker',
       MQTT_PORT: '1883',
       DEVICE_1_IP: 'mock-ez1',
-      DEVICE_1_NICKNAME: DEVICE_NICKNAME,
+      ...(!options.nicknameless && { DEVICE_1_NICKNAME: DEVICE_NICKNAME }),
       DEVICE_2_IP: '0.0.0.0',
       DEVICE_2_NICKNAME: OFFLINE_DEVICE_NICKNAME,
       HOMEASSISTANT_ENABLE: 'true',
@@ -156,6 +169,7 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
 
 function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContainer: StartedTestContainer): Promise<void> {
   return new Promise((resolve, reject) => {
+    const deviceTopic = deviceTopicOf(options);
     const pendingAssertions = new Set(
       options.onlySunAssertions
         ? ['ez12mqttOnline']
@@ -211,9 +225,10 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
       logger.info('Subscribed to discovery topic:', { topic: discoveryWildcard });
     });
 
-    if (options.onlySunAssertions) {
-      // No device ever comes online here, so discovery never fires and the usual
-      // subscribe-after-discovery path below never runs.
+    if (options.onlySunAssertions || options.nicknameless) {
+      // Sun-down: no device ever comes online, so discovery never fires and the usual
+      // subscribe-after-discovery path below never runs. Nickname-less: watch every topic from the
+      // start, so a publish to `<base>//…` before the device ID is known can't slip past.
       const wildcard = `${MQTT_BASE_TOPIC}/#`;
       client.subscribe(wildcard, (err) => {
         if (err) fail(`Failed to subscribe to ${wildcard}: ${err.message}`);
@@ -230,6 +245,10 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
     let initialMaxPower: number | null = null;
 
     client.on('message', (topic, message) => {
+      if (options.nicknameless && topic.startsWith(`${MQTT_BASE_TOPIC}//`)) {
+        fail(`Published to ${topic}: a device topic was used before its device ID was known (#9).`);
+        return;
+      }
       const payload = JSON.parse(message.toString());
       logger.debug(`Received message on topic: ${topic}`, { payload });
 
@@ -260,13 +279,13 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
             for (const discovered of discoveryMessages.values()) {
               if (discovered.state_topic) stateTopics.add(discovered.state_topic);
               if (discovered.availability_topic) availabilityTopics.add(discovered.availability_topic);
-              if (discovered.name === 'Max Power' && discovered.device.identifiers.includes('E28000000238')) {
+              if (discovered.name === 'Max Power' && discovered.device.identifiers.includes(MOCK_DEVICE_ID)) {
                 maxPowerStateTopic = discovered.state_topic ?? null;
                 maxPowerCommandTopic = discovered.command_topic ?? null;
               }
             }
 
-            const energyTopic = `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/energy`;
+            const energyTopic = `${MQTT_BASE_TOPIC}/${deviceTopic}/energy`;
             const topicsToSubscribe = [...stateTopics, ...availabilityTopics, `${MQTT_BASE_TOPIC}/_status`, energyTopic];
             if (options.expectOfflineDevice) {
               topicsToSubscribe.push(`${MQTT_BASE_TOPIC}/${OFFLINE_DEVICE_NICKNAME}/energy`);
@@ -281,7 +300,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
 
       if (
         pendingAssertions.has('sunFieldsPublished') &&
-        topic === `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/status`
+        topic === `${MQTT_BASE_TOPIC}/${deviceTopic}/status`
       ) {
         const missing = ['sunAzimuth_deg', 'sunElevation_deg', 'isSunUp', 'sunriseAt', 'sunsetAt', 'isPollSkipped']
           .filter(k => !(k in payload));
@@ -314,7 +333,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
         }
       }
 
-      if (topic === `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/energy`) {
+      if (topic === `${MQTT_BASE_TOPIC}/${deviceTopic}/energy`) {
         if (payload.totalEnergyLifetime_kWh === payload.channel1EnergyLifetime_kWh + payload.channel2EnergyLifetime_kWh) {
           if (pendingAssertions.has('energyTopicReceived')) {
             pass('Energy topic received and validated.');
@@ -370,7 +389,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
         }
       }
 
-      if (stateTopics.has(topic) && topic.includes(DEVICE_NICKNAME) && topic !== maxPowerStateTopic) {
+      if (stateTopics.has(topic) && topic.includes(deviceTopic) && topic !== maxPowerStateTopic) {
         if (payload.isOnline === true && payload.channel1Power_W !== null) {
           if (pendingAssertions.has('deviceStatusOnline')) {
             pass('Device status is online.');
@@ -389,7 +408,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
         }
       }
 
-      if (availabilityTopics.has(topic) && topic.includes(DEVICE_NICKNAME)) {
+      if (availabilityTopics.has(topic) && topic.includes(deviceTopic)) {
         if (payload === 1 || payload.toString() === '1') {
           if (pendingAssertions.has('deviceAvailabilityReceived')) {
             pass('Device availability is online.');
@@ -426,6 +445,13 @@ async function main() {
       // fields ride along without disturbing it.
       sunNow: '2026-06-21T12:00:00Z',
       expectPollSkipped: false,
+    }, logOnPass);
+    await runTest({
+      testName: 'No Nickname (topic is the device ID)',
+      prePopulate: false,
+      expectedDiscoveryMessages: 14,
+      expectOfflineDevice: false,
+      nicknameless: true,
     }, logOnPass);
     await runTest({
       testName: 'Sun Down (polling skipped)',
