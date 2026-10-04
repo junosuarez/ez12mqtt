@@ -1,7 +1,7 @@
 import config from './config.ts';
-import { logger } from './logger.ts';
+import { errorMessage, logger } from './logger.ts';
 import { recordDeviceOnline, recordPollError, recordPollSuccess, startMetricsServer } from './metrics.ts';
-import { EZ1API } from './api.ts';
+import { EZ1API, type AlarmInfo, type OutputData } from './api.ts';
 import { MQTTClient } from './mqtt.ts';
 
 import { publishDiscoveryMessages } from './homeassistant.ts';
@@ -91,7 +91,7 @@ async function fetchAndPublishMaxPower(deviceState: DeviceState): Promise<void> 
   }
 }
 
-async function publishEnergyTopic(deviceState: DeviceState, outputData: any): Promise<void> {
+async function publishEnergyTopic(deviceState: DeviceState, outputData: OutputData | null): Promise<void> {
   if (outputData) {
     const payload = {
       observedAt: Math.floor(Date.now() / 1000),
@@ -104,13 +104,36 @@ async function publishEnergyTopic(deviceState: DeviceState, outputData: any): Pr
   }
 }
 
-async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | null): Promise<any> {
+/** Published (not retained) on `<base>/<device>/status`; nulls mean "asked and got nothing". */
+interface StatusPayload {
+  observedAt: number;
+  isOnline: boolean;
+  deviceLastSeenAt: number | null;
+  sunAzimuth_deg?: number;
+  sunElevation_deg?: number;
+  isSunUp?: boolean;
+  sunriseAt?: SunState['sunriseAt'];
+  sunsetAt?: SunState['sunsetAt'];
+  isPollSkipped?: boolean;
+  channel1Power_W: number | null;
+  channel1EnergySinceStartup_kWh: number | null;
+  channel2Power_W: number | null;
+  channel2EnergySinceStartup_kWh: number | null;
+  totalPower_W: number | null;
+  totalEnergySinceStartup_kWh: number | null;
+  isOffGrid: boolean | null;
+  isOutputFault: boolean | null;
+  isChannel1ShortCircuit: boolean | null;
+  isChannel2ShortCircuit: boolean | null;
+}
+
+async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | null): Promise<OutputData | null> {
   // The EZ1 is powered from its own PV input, so after dark it is off, not idle — polling
   // it then just buys two timeouts and a nightly false "outage".
   const asleep = sun !== null && !sun.isSunUp;
 
-  let outputData: any = null;
-  let alarmInfo: any = null;
+  let outputData: OutputData | null = null;
+  let alarmInfo: AlarmInfo | null = null;
   if (!asleep) {
     const api = new EZ1API(deviceState.ip);
     outputData = await api.getOutputData();
@@ -154,10 +177,20 @@ async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | n
     mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
   }
 
-  const payload: any = {
+  const payload: StatusPayload = {
     observedAt: Math.floor(Date.now() / 1000),
     isOnline: deviceState.isOnline,
     deviceLastSeenAt: deviceState.lastSeenAt,
+    channel1Power_W: null,
+    channel1EnergySinceStartup_kWh: null,
+    channel2Power_W: null,
+    channel2EnergySinceStartup_kWh: null,
+    totalPower_W: null,
+    totalEnergySinceStartup_kWh: null,
+    isOffGrid: null,
+    isOutputFault: null,
+    isChannel1ShortCircuit: null,
+    isChannel2ShortCircuit: null,
   };
 
   if (sun) {
@@ -177,13 +210,6 @@ async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | n
     payload.channel2EnergySinceStartup_kWh = outputData.e2;
     payload.totalPower_W = outputData.p1 + outputData.p2;
     payload.totalEnergySinceStartup_kWh = outputData.e1 + outputData.e2;
-  } else {
-    payload.channel1Power_W = null;
-    payload.channel1EnergySinceStartup_kWh = null;
-    payload.channel2Power_W = null;
-    payload.channel2EnergySinceStartup_kWh = null;
-    payload.totalPower_W = null;
-    payload.totalEnergySinceStartup_kWh = null;
   }
 
   if (alarmInfo) {
@@ -191,11 +217,6 @@ async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | n
     payload.isOutputFault = alarmInfo.oe === '1';
     payload.isChannel1ShortCircuit = alarmInfo.isce1 === '1';
     payload.isChannel2ShortCircuit = alarmInfo.isce2 === '1';
-  } else {
-    payload.isOffGrid = null;
-    payload.isOutputFault = null;
-    payload.isChannel1ShortCircuit = null;
-    payload.isChannel2ShortCircuit = null;
   }
 
   mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/status`, payload);
@@ -236,6 +257,34 @@ async function pollDevice(deviceState: DeviceState, sun: SunState | null = curre
   }
 }
 
+/** The fields restoreState reads back from a retained `info` message (see fetchAndPublishInfo). */
+interface RetainedInfo {
+  deviceIdentifier: string;
+  deviceIPAddress?: string;
+  minimumPowerOutput_W?: number;
+  maximumPowerOutput_W?: number;
+}
+
+/** Retained messages are whatever is on the broker — possibly hand-written or from an older
+ * version — so check the shape instead of trusting it. Null if it isn't usable. */
+function parseRetainedInfo(messageString: string): RetainedInfo | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(messageString);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const p = parsed as Record<string, unknown>;
+  if (typeof p.deviceIdentifier !== 'string' || !p.deviceIdentifier) return null;
+  return {
+    deviceIdentifier: p.deviceIdentifier,
+    deviceIPAddress: typeof p.deviceIPAddress === 'string' ? p.deviceIPAddress : undefined,
+    minimumPowerOutput_W: typeof p.minimumPowerOutput_W === 'number' ? p.minimumPowerOutput_W : undefined,
+    maximumPowerOutput_W: typeof p.maximumPowerOutput_W === 'number' ? p.maximumPowerOutput_W : undefined,
+  };
+}
+
 async function restoreState(): Promise<void> {
   return new Promise((resolve) => {
     const wildcardTopic = `${config.mqttBaseTopic}/#`;
@@ -250,11 +299,9 @@ async function restoreState(): Promise<void> {
 
       if (match) {
         const deviceTopic = match[1];
-        let payload: any;
-        try {
-          payload = JSON.parse(messageString);
-        } catch {
-          logger.warn(`Ignoring unparseable retained info on ${topic}`);
+        const payload = parseRetainedInfo(messageString);
+        if (!payload) {
+          logger.warn(`Ignoring unusable retained info on ${topic}`);
           return;
         }
         // A nickname-less device's topic is its device ID, which is exactly what we're trying to
@@ -347,8 +394,8 @@ async function main(): Promise<void> {
           api.setMaxPower(power).then(() => {
             logger.debug(`setMaxPower successful for ${deviceTopic}. Re-publishing maxPower topic.`);
             fetchAndPublishMaxPower(deviceState);
-          }).catch(error => {
-            logger.error(`Failed to set max power for ${deviceTopic}: ${error.message}`);
+          }).catch((error: unknown) => {
+            logger.error(`Failed to set max power for ${deviceTopic}: ${errorMessage(error)}`);
           });
         } else {
           logger.warn(`Invalid power value received for ${deviceTopic}: ${messageString}`);
@@ -361,7 +408,7 @@ async function main(): Promise<void> {
 
   // Fires on the first connect AND every reconnect (mqtt.js re-emits 'connect' each time).
   mqttClient.on('connect', () => {
-    onMqttConnected().catch(error => logger.error('onMqttConnected failed', { error: error.message }));
+    onMqttConnected().catch((error: unknown) => logger.error('onMqttConnected failed', { error: errorMessage(error) }));
   });
 
   // Not awaited: mqtt.js retries internally (see mqtt.ts), and the inverter poll loop below must
@@ -398,7 +445,7 @@ function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-main().catch(error => {
-  logger.error('Application crashed:', { error: error.message, stack: error.stack });
+main().catch((error: unknown) => {
+  logger.error('Application crashed:', { error: errorMessage(error), stack: error instanceof Error ? error.stack : undefined });
   process.exit(1);
 });

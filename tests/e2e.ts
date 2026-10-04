@@ -2,7 +2,7 @@ import * as mqtt from 'mqtt';
 import type { MqttClient } from 'mqtt';
 import { GenericContainer, Network, Wait } from 'testcontainers';
 import type { StartedTestContainer } from 'testcontainers';
-import { logger } from '../src/logger.ts';
+import { errorMessage, logger } from '../src/logger.ts';
 
 // Note: It is never correct to increase this timeout. A timeout error always indicates a correctness bug.
 const ASSERTION_TIMEOUT = 60 * 1000;
@@ -13,6 +13,15 @@ const OFFLINE_DEVICE_NICKNAME = 'offline_inverter';
 const HOMEASSISTANT_DISCOVERY_PREFIX = 'homeassistant';
 
 const logOnPass = process.argv.includes('--log-on-pass');
+
+/** The discovery fields the assertions below read back. */
+interface DiscoveryMessage {
+  name: string;
+  state_topic?: string;
+  availability_topic?: string;
+  command_topic?: string;
+  device: { identifiers: string[] };
+}
 
 interface TestOptions {
   testName: string;
@@ -126,8 +135,8 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
 
   try {
     await runAssertions(testClient, options, ez12mqttContainer);
-  } catch (e: any) {
-    logger.error(`Test failed: ${e.message}`);
+  } catch (e: unknown) {
+    logger.error(`Test failed: ${errorMessage(e)}`);
     throw e;
   } finally {
     if (logOnPass) {
@@ -170,7 +179,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
       pendingAssertions.add('device2EnergyRestored');
     }
 
-    logger.info('Waiting for assertions:', Array.from(pendingAssertions));
+    logger.info('Waiting for assertions:', { assertions: Array.from(pendingAssertions) });
 
     async function fail(message: string) {
       logger.error(`Assertion failed: ${message}`);
@@ -212,7 +221,7 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
       });
     }
 
-    let discoveryMessages = new Map<string, any>();
+    let discoveryMessages = new Map<string, DiscoveryMessage>();
     let stateTopics = new Set<string>();
     let availabilityTopics = new Set<string>();
     let maxPowerStateTopic: string | null = null;
@@ -252,8 +261,8 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
               if (discovered.state_topic) stateTopics.add(discovered.state_topic);
               if (discovered.availability_topic) availabilityTopics.add(discovered.availability_topic);
               if (discovered.name === 'Max Power' && discovered.device.identifiers.includes('E28000000238')) {
-                maxPowerStateTopic = discovered.state_topic;
-                maxPowerCommandTopic = discovered.command_topic;
+                maxPowerStateTopic = discovered.state_topic ?? null;
+                maxPowerCommandTopic = discovered.command_topic ?? null;
               }
             }
 
@@ -345,8 +354,9 @@ function runAssertions(client: MqttClient, options: TestOptions, ez12mqttContain
 
       if (topic === maxPowerStateTopic) {
         if (initialMaxPower === null) {
-          initialMaxPower = payload.maximumPowerOutput_W;
-          const newMaxPower = initialMaxPower - 50;
+          const initial: number = payload.maximumPowerOutput_W;
+          initialMaxPower = initial;
+          const newMaxPower = initial - 50;
           logger.info(`Setting max power to ${newMaxPower}`);
           if (maxPowerCommandTopic) client.publish(maxPowerCommandTopic, newMaxPower.toString());
         } else {

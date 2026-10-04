@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { describe, it, mock } from 'node:test';
+import type { connect, IClientPublishOptions, MqttClient } from 'mqtt';
 
 // config.ts reads env at import time and exits on invalid input — see metrics.test.ts.
 process.env.DEVICE_1_IP ??= '10.0.0.1';
@@ -13,13 +14,14 @@ class FakeMqttClient extends EventEmitter {
   end = mock.fn(() => {});
   subscribe = mock.fn((_topic: string, cb?: (err: Error | null) => void) => cb?.(null));
   unsubscribe = mock.fn((_topic: string, cb?: (err: Error | null) => void) => cb?.(null));
-  publish = mock.fn((_topic: string, _payload: string, _opts: any, cb?: (err: Error | null) => void) => cb?.(null));
+  publish = mock.fn((_topic: string, _payload: string, _opts: IClientPublishOptions, cb?: (err: Error | null) => void) => cb?.(null));
 }
 
 function newClientWithFake() {
   const fake = new FakeMqttClient();
-  const connectFn = mock.fn(() => fake as any);
-  const client = new MQTTClient(connectFn as any);
+  // The fake implements only what MQTTClient touches, so it can't be a structural MqttClient.
+  const connectFn = mock.fn((): MqttClient => fake as unknown as MqttClient);
+  const client = new MQTTClient(connectFn as typeof connect);
   return { fake, client };
 }
 
