@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as mqtt from 'mqtt';
 import type { MqttClient } from 'mqtt';
 import { GenericContainer, Network, Wait } from 'testcontainers';
@@ -40,6 +44,31 @@ interface TestOptions {
   // Device 1 configured without DEVICE_1_NICKNAME: its topic is then the device ID, learned from the
   // inverter. Also asserts nothing is ever published to `<base>//…` (#9).
   nicknameless?: boolean;
+  // The broker listens on TLS only (8883), with a certificate from a throwaway CA the bridge is given
+  // via MQTT_CA_FILE (#23). MQTT_PORT is left unset, so this also covers the 8883 default.
+  tls?: boolean;
+}
+
+/**
+ * A throwaway CA and a server certificate for the broker, made fresh for each run so no private key
+ * is ever committed. The SANs cover the broker's name on the test network (for the bridge) and
+ * localhost (for this process's test client, via the mapped port).
+ */
+function makeTestCerts(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'ez12mqtt-tls-'));
+  const openssl = (...args: string[]) => execFileSync('openssl', args, { cwd: dir, stdio: 'pipe' });
+  writeFileSync(join(dir, 'ca.cnf'), [
+    '[req]', 'distinguished_name=dn', 'prompt=no', '[dn]', 'CN=ez12mqtt e2e test CA',
+    '[v3_ca]', 'basicConstraints=critical,CA:TRUE', 'keyUsage=critical,keyCertSign,cRLSign', 'subjectKeyIdentifier=hash',
+  ].join('\n'));
+  writeFileSync(join(dir, 'server.ext'), [
+    'subjectAltName=DNS:mqtt-broker,DNS:localhost,IP:127.0.0.1', 'basicConstraints=CA:FALSE',
+    'keyUsage=critical,digitalSignature,keyEncipherment', 'extendedKeyUsage=serverAuth',
+  ].join('\n'));
+  openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-keyout', 'ca.key', '-out', 'ca.pem', '-config', 'ca.cnf', '-extensions', 'v3_ca');
+  openssl('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=mqtt-broker');
+  openssl('x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-out', 'server.pem', '-extfile', 'server.ext');
+  return dir;
 }
 
 /** Device 1's topic level: its nickname, or its device ID when it has none. */
@@ -52,16 +81,22 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
   }
   logger.info(`--- Running test: ${options.testName} ---`);
 
+  const certs = options.tls ? makeTestCerts() : null;
+  const brokerPort = certs ? 8883 : 1883;
+  // 0o644 on the key too: it's a throwaway, and mosquitto runs as its own unprivileged user.
+  const certFile = (name: string, target: string) => ({ source: join(certs!, name), target, mode: 0o644 });
+
   const network = await new Network().start();
   const mqttContainer = await new GenericContainer('eclipse-mosquitto:2.0.15')
     .withNetwork(network)
     .withNetworkAliases('mqtt-broker')
-    .withExposedPorts(1883)
+    .withExposedPorts(brokerPort)
     .withCopyFilesToContainer([
       {
-        source: './tests/test-mosquitto.conf',
+        source: certs ? './tests/test-mosquitto-tls.conf' : './tests/test-mosquitto.conf',
         target: '/mosquitto/config/mosquitto.conf',
       },
+      ...(certs ? ['ca.pem', 'server.pem', 'server.key'].map((name) => certFile(name, `/mosquitto/certs/${name}`)) : []),
     ])
     .start();
 
@@ -80,11 +115,12 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
     .start();
 
   const mqttHost = mqttContainer.getHost();
-  const mqttPort = mqttContainer.getMappedPort(1883);
+  const mqttPort = mqttContainer.getMappedPort(brokerPort);
+  const clientOptions = { host: mqttHost, port: mqttPort, ...(certs && { protocol: 'mqtts' as const, ca: readFileSync(join(certs, 'ca.pem')) }) };
 
   if (options.prePopulate) {
     logger.info('Pre-populating retained messages...');
-    const setupClient = mqtt.connect({ host: mqttHost, port: mqttPort });
+    const setupClient = mqtt.connect(clientOptions);
     await new Promise<void>((resolve) => setupClient.on('connect', () => resolve()));
     const infoTopic = `${MQTT_BASE_TOPIC}/${DEVICE_NICKNAME}/info`;
     const infoPayload = {
@@ -125,7 +161,7 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
     .withNetwork(network)
     .withEnvironment({
       MQTT_HOST: 'mqtt-broker',
-      MQTT_PORT: '1883',
+      ...(certs ? { MQTT_TLS: 'true', MQTT_CA_FILE: '/certs/ca.pem' } : { MQTT_PORT: '1883' }),
       DEVICE_1_IP: 'mock-ez1',
       ...(!options.nicknameless && { DEVICE_1_NICKNAME: DEVICE_NICKNAME }),
       DEVICE_2_IP: '0.0.0.0',
@@ -141,10 +177,11 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
         SUN_NOW_OVERRIDE: options.sunNow,
       }),
     })
+    .withCopyFilesToContainer(certs ? [certFile('ca.pem', '/certs/ca.pem')] : [])
     .start();
 
   logger.info('Running assertions...');
-  const testClient = mqtt.connect({ host: mqttHost, port: mqttPort });
+  const testClient = mqtt.connect(clientOptions);
 
   try {
     await runAssertions(testClient, options, ez12mqttContainer);
@@ -164,6 +201,7 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
     await mqttContainer.stop();
     await network.stop();
     testClient.end();
+    if (certs) rmSync(certs, { recursive: true, force: true });
   }
 }
 
@@ -452,6 +490,13 @@ async function main() {
       expectedDiscoveryMessages: 14,
       expectOfflineDevice: false,
       nicknameless: true,
+    }, logOnPass);
+    await runTest({
+      testName: 'TLS Broker (mqtts with a private CA)',
+      prePopulate: false,
+      expectedDiscoveryMessages: 14,
+      expectOfflineDevice: false,
+      tls: true,
     }, logOnPass);
     await runTest({
       testName: 'Sun Down (polling skipped)',

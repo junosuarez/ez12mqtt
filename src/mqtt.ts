@@ -3,6 +3,42 @@ import type { IClientOptions, MqttClient, MqttClientEventCallbacks } from 'mqtt'
 import config from './config.ts';
 import { logger } from './logger.ts';
 
+type BrokerSettings = Pick<typeof config, 'mqttHost' | 'mqttPort' | 'mqttTls' | 'mqttUser' | 'mqttPassword' | 'mqttBaseTopic'>;
+
+/** Pure: the broker URL and client options for a config, so the TLS/plain split is unit-tested. */
+export function brokerConnection(settings: BrokerSettings): { url: string; options: IClientOptions } {
+  const tls = settings.mqttTls;
+  return {
+    url: `${tls ? 'mqtts' : 'mqtt'}://${settings.mqttHost}:${settings.mqttPort}`,
+    options: {
+      clientId: `ez12mqtt_${Math.random().toString(16).slice(3)}`,
+      clean: true,
+      connectTimeout: 4000,
+      reconnectPeriod: 1000,
+      // Plain reconnectPeriod only covers timeouts and drops; a broker that actively rejects the
+      // CONNACK (e.g. mid-restart with a stale config) needs this too, or the client can wedge
+      // permanently on that one rejected attempt.
+      reconnectOnConnackError: true,
+      ...(settings.mqttUser && { username: settings.mqttUser }),
+      ...(settings.mqttPassword && { password: settings.mqttPassword }),
+      ...(tls && {
+        // Explicit rather than relying on the default: verification is the whole point, and there's
+        // deliberately no setting that turns it off.
+        rejectUnauthorized: true,
+        ...(tls.ca && { ca: tls.ca }),
+        ...(tls.cert && { cert: tls.cert }),
+        ...(tls.key && { key: tls.key }),
+      }),
+      will: {
+        topic: `${settings.mqttBaseTopic}/_status`,
+        payload: JSON.stringify({ online: false }),
+        qos: 1,
+        retain: true,
+      },
+    },
+  };
+}
+
 type ClientEvent = keyof MqttClientEventCallbacks;
 
 /** A listener held as closures, so the heterogeneous list needs no cast to replay onto a client. */
@@ -33,25 +69,9 @@ export class MQTTClient {
    * mocking — Node's strip-only TS mode doesn't support constructor parameter properties. */
   constructor(connectFn: typeof mqtt.connect = mqtt.connect) {
     this.connectFn = connectFn;
-    this.mqttUrl = `mqtt://${config.mqttHost}:${config.mqttPort}`;
-    this.options = {
-      clientId: `ez12mqtt_${Math.random().toString(16).slice(3)}`,
-      clean: true,
-      connectTimeout: 4000,
-      reconnectPeriod: 1000,
-      // Plain reconnectPeriod only covers timeouts and drops; a broker that actively rejects the
-      // CONNACK (e.g. mid-restart with a stale config) needs this too, or the client can wedge
-      // permanently on that one rejected attempt.
-      reconnectOnConnackError: true,
-      ...(config.mqttUser && { username: config.mqttUser }),
-      ...(config.mqttPassword && { password: config.mqttPassword }),
-      will: {
-        topic: `${config.mqttBaseTopic}/_status`,
-        payload: JSON.stringify({ online: false }),
-        qos: 1,
-        retain: true,
-      },
-    };
+    const { url, options } = brokerConnection(config);
+    this.mqttUrl = url;
+    this.options = options;
   }
 
   /** Live read for the metrics gauge — reading the client's own flag beats tracking events, which

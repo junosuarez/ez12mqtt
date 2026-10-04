@@ -106,3 +106,28 @@ describe('MQTTClient listeners — main() registers them before connect()', () =
     assert.equal(onMessage.mock.calls.length, 0);
   });
 });
+
+describe('brokerConnection — TLS (#23)', async () => {
+  const { brokerConnection } = await import('../src/mqtt.ts');
+  const settings = { mqttHost: 'broker', mqttPort: 8883, mqttBaseTopic: 'ez12mqtt', mqttUser: undefined, mqttPassword: undefined };
+
+  it('uses plain mqtt:// with no TLS options when TLS is off', () => {
+    const { url, options } = brokerConnection({ ...settings, mqttPort: 1883, mqttTls: undefined });
+    assert.equal(url, 'mqtt://broker:1883');
+    assert.equal(options.rejectUnauthorized, undefined);
+    assert.equal(options.ca, undefined);
+  });
+
+  it('uses mqtts:// with verification on and the configured CA and client certificate', () => {
+    const { url, options } = brokerConnection({ ...settings, mqttTls: { ca: 'CA', cert: 'CERT', key: 'KEY' } });
+    assert.equal(url, 'mqtts://broker:8883');
+    assert.equal(options.rejectUnauthorized, true);
+    assert.deepEqual([options.ca, options.cert, options.key], ['CA', 'CERT', 'KEY']);
+  });
+
+  it('keeps verification on even with no CA file (the system trust store applies)', () => {
+    const { options } = brokerConnection({ ...settings, mqttTls: {} });
+    assert.equal(options.rejectUnauthorized, true);
+    assert.equal(options.ca, undefined);
+  });
+});

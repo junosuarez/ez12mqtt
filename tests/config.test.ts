@@ -105,3 +105,44 @@ describe('config — devices', () => {
     assert.match(parseConfig({}).errors.join(), /At least one device/);
   });
 });
+
+describe('config — MQTT over TLS (#23)', () => {
+  const files: Record<string, string> = { '/certs/ca.pem': 'CA', '/certs/client.pem': 'CERT', '/certs/client.key': 'KEY' };
+  const readFile = (path: string) => {
+    if (!(path in files)) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+    return files[path];
+  };
+  const parse = (env: Record<string, string>) => parseConfig({ ...base, ...env }, readFile);
+
+  it('stays plain mqtt on 1883 by default, so existing setups are unaffected', () => {
+    const { config, errors } = parse({});
+    assert.deepEqual(errors, []);
+    assert.equal(config.mqttTls, undefined);
+    assert.equal(config.mqttPort, 1883);
+  });
+
+  it('defaults to 8883 with TLS, and still honours an explicit MQTT_PORT', () => {
+    assert.equal(parse({ MQTT_TLS: 'true' }).config.mqttPort, 8883);
+    assert.equal(parse({ MQTT_TLS: 'true', MQTT_PORT: '18883' }).config.mqttPort, 18883);
+  });
+
+  it('reads the CA and client certificate at startup', () => {
+    const { config, errors } = parse({
+      MQTT_TLS: 'true', MQTT_CA_FILE: '/certs/ca.pem', MQTT_CERT_FILE: '/certs/client.pem', MQTT_KEY_FILE: '/certs/client.key',
+    });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(config.mqttTls, { ca: 'CA', cert: 'CERT', key: 'KEY' });
+  });
+
+  it('fails at startup when a referenced file is missing, naming it', () => {
+    assert.match(parse({ MQTT_TLS: 'true', MQTT_CA_FILE: '/nope.pem' }).errors.join(), /MQTT_CA_FILE could not be read from "\/nope.pem" \(ENOENT\)/);
+  });
+
+  it('requires a client certificate and key together', () => {
+    assert.match(parse({ MQTT_TLS: 'true', MQTT_CERT_FILE: '/certs/client.pem' }).errors.join(), /MQTT_CERT_FILE and MQTT_KEY_FILE/);
+  });
+
+  it('rejects TLS files without MQTT_TLS=true, rather than silently connecting in cleartext', () => {
+    assert.match(parse({ MQTT_CA_FILE: '/certs/ca.pem' }).errors.join(), /only apply with MQTT_TLS=true/);
+  });
+});

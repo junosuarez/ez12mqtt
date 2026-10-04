@@ -106,9 +106,13 @@ services:
 | `DEVICE_{n}_NICKNAME`    | The nickname of the {n}th device, used as its MQTT topic level. Unique; no `/`, `+` or `#`.  |             |
 | `DEVICE_{n}_DESCRIPTION` | The description of the {n}th device.                                                         |             |
 | `MQTT_HOST`              | The hostname or IP address of the MQTT broker.                                               | `localhost` |
-| `MQTT_PORT`              | The port of the MQTT broker.                                                                 | `1883`      |
+| `MQTT_PORT`              | The port of the MQTT broker.                                                                 | `1883`, or `8883` with `MQTT_TLS` |
 | `MQTT_USER`              | The username for MQTT authentication.                                                        |             |
 | `MQTT_PASSWORD`          | The password for MQTT authentication.                                                        |             |
+| `MQTT_TLS`               | `true` to connect over TLS (`mqtts://`). The broker's certificate is always verified.       | `false`     |
+| `MQTT_CA_FILE`           | Path to a PEM CA bundle, for a broker whose certificate isn't from a publicly trusted CA.   |             |
+| `MQTT_CERT_FILE`         | Path to a PEM client certificate, for brokers that require mutual TLS. Needs `MQTT_KEY_FILE`. |           |
+| `MQTT_KEY_FILE`          | Path to the client certificate's PEM private key. Needs `MQTT_CERT_FILE`.                    |             |
 | `MQTT_BASE_TOPIC`        | The base topic for all MQTT messages. May have levels (`home/solar`); no `+`, `#` or `//`.  | `ez12mqtt`  |
 | `POLL_INTERVAL`          | Whole seconds between polls of the fast-changing device data (`getOutputData`, `getAlarm`).  | `30`        |
 | `LOG_LEVEL`              | The log level for the application. Can be `INFO` or `DEBUG`.                                 | `INFO`      |
@@ -116,6 +120,15 @@ services:
 | `LONGITUDE`              | Longitude for solar position. Enables the sun features (with `LATITUDE`).                    |             |
 | `SUN_ELEVATION_THRESHOLD`| Sun elevation (deg) at or below which polling is skipped.                                    | `-6`        |
 | `METRICS_PORT`           | Port for the Prometheus `/metrics` endpoint. **Unset means no endpoint and no inbound port.** |             |
+
+### MQTT over TLS
+
+Plain `mqtt://` is the default and fine on a trusted LAN or inside a cluster. If the broker is reached over anything else, set `MQTT_TLS=true`: otherwise `MQTT_USER`/`MQTT_PASSWORD`, every reading, and the `maxPower_W/set` commands that change inverter output all cross the network in cleartext.
+
+- The broker's certificate is always verified; there is no setting to skip that. For a broker using a private or self-signed CA, point `MQTT_CA_FILE` at that CA.
+- For mutual TLS, set both `MQTT_CERT_FILE` and `MQTT_KEY_FILE`.
+- The files are read at startup: a missing or unreadable one stops the bridge with an error naming the variable, rather than failing later at connect. The `*_FILE` variables without `MQTT_TLS=true` are also an error, so a typo can't quietly leave the connection unencrypted.
+- In a container, mount the files read-only and point the variables at the mount, e.g. `-v ./certs:/certs:ro -e MQTT_TLS=true -e MQTT_CA_FILE=/certs/ca.pem`. The image runs as the `node` user, so the files must be readable by it.
 
 ### Solar position
 
