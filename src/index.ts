@@ -43,19 +43,28 @@ config.devices.forEach(deviceConfig => {
   });
 });
 
+// Subscribed before anything can advertise it: discovery hands Home Assistant this command topic,
+// and a command published before the subscription exists is simply lost (it isn't retained).
+function subscribeToCommands(deviceState: DeviceState): void {
+  if (config.homeAssistantEnable && deviceState.mqttTopic) {
+    mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
+  }
+}
+
+/** For nickname-less devices, whose topic is the device ID once it's learned. */
+function learnTopic(deviceState: DeviceState, deviceId: string): void {
+  if (deviceState.nickname || deviceState.mqttTopic === deviceId) return;
+  deviceState.mqttTopic = deviceId;
+  subscribeToCommands(deviceState);
+}
+
 async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
   const api = new EZ1API(deviceState.ip);
   const deviceInfo = await api.getDeviceInfo();
 
   if (deviceInfo) {
     deviceState.deviceId = deviceInfo.deviceId;
-    if (!deviceState.nickname && deviceState.mqttTopic !== deviceInfo.deviceId) {
-      deviceState.mqttTopic = deviceInfo.deviceId;
-      // onMqttConnected could not subscribe for a topic it did not know yet.
-      if (config.homeAssistantEnable) {
-        mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
-      }
-    }
+    learnTopic(deviceState, deviceInfo.deviceId);
 
     deviceState.minPower = parseFloat(deviceInfo.minPower);
     deviceState.maxPower = parseFloat(deviceInfo.maxPower);
@@ -314,9 +323,7 @@ async function restoreState(): Promise<void> {
           deviceState.deviceId = payload.deviceIdentifier;
           deviceState.minPower = payload.minimumPowerOutput_W;
           deviceState.maxPower = payload.maximumPowerOutput_W;
-          if (!deviceState.nickname) {
-            deviceState.mqttTopic = payload.deviceIdentifier;
-          }
+          learnTopic(deviceState, payload.deviceIdentifier);
         }
       }
     };
@@ -337,26 +344,31 @@ async function restoreState(): Promise<void> {
 // availability) for a device that came online during an outage needs a deliberate resend once
 // the broker is reachable again, rather than waiting for the device's next offline→online edge.
 async function onMqttConnected(): Promise<void> {
+  // First, before restoreState's wait: the poll loop keeps running meanwhile and may publish
+  // discovery, and topics learned later subscribe in learnTopic.
+  for (const deviceState of deviceStates) {
+    subscribeToCommands(deviceState);
+  }
+
   await restoreState();
 
   for (const deviceState of deviceStates) {
     if (deviceState.isOnline) {
       await fetchAndPublishInfo(deviceState);
     }
-    // Still unknown: fetchAndPublishInfo subscribes once a later poll learns it.
+    // Still unknown: learnTopic subscribes once a later poll learns it.
     if (!deviceState.mqttTopic) continue;
-
-    if (config.homeAssistantEnable) {
-      mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
-    }
 
     if (deviceState.isOnline) {
       mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '1', true);
       await fetchAndPublishMaxPower(deviceState);
-      if (config.homeAssistantEnable) {
-        publishDiscoveryMessages(deviceState, mqttClient);
-        deviceState.discoveryPublished = true;
-      }
+    }
+
+    // Online or not: an inverter asleep at startup still has an identity restored from its retained
+    // info, and Home Assistant should know about it before sunrise rather than only after.
+    if (config.homeAssistantEnable && deviceState.deviceId) {
+      publishDiscoveryMessages(deviceState, mqttClient);
+      deviceState.discoveryPublished = true;
     }
   }
 }
