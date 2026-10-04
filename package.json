@@ -7,7 +7,7 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "start": "node src/index.ts",
+    "start": "node --env-file-if-exists=.env src/index.ts",
     "test": "node --test tests/*.test.ts",
     "test:e2e": "export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock;export TESTCONTAINERS_RYUK_DISABLED=true;export DOCKER_AUTH_CONFIG=\"$(cat $HOME/.config/containers/auth.json)\" && node tests/e2e.ts",
     "build:container:app": "podman build -f Dockerfile -t ez12mqtt:latest . && podman push localhost/ez12mqtt:latest ghcr.io/junosuarez/ez12mqtt:latest",
@@ -20,13 +20,12 @@
   "type": "module",
   "dependencies": {
     "axios": "^1.20.0",
-    "dotenv": "^17.4.2",
-    "mqtt": "^5.15.2",
-    "suncalc": "^2.0.1"
+    "mqtt": "^5.16.0",
+    "suncalc": "^2.1.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
-    "testcontainers": "^12.0.4",
+    "@types/node": "^26.6.4",
+    "testcontainers": "^12.2.0",
     "typescript": "^7.0.2"
   }
 }
