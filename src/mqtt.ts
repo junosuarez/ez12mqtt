@@ -13,6 +13,10 @@ export class MQTTClient {
    * exactly like a dropped one — otherwise a connect that never succeeds looks indistinguishable
    * from one that hasn't been attempted yet. */
   private disconnectedSince: number | null = Date.now();
+  /** Listeners registered via on(), replayed onto the underlying client when connect() creates it.
+   * main() registers its 'connect' and 'message' handlers before calling connect(), and forwarding
+   * to a client that doesn't exist yet silently dropped them. */
+  private readonly listeners: Array<[event: string, listener: (...args: any[]) => void]> = [];
 
   private readonly connectFn: typeof mqtt.connect;
 
@@ -88,6 +92,11 @@ export class MQTTClient {
         logger.warn('MQTT connection closed.');
         if (this.disconnectedSince === null) this.disconnectedSince = Date.now();
       });
+
+      // After our own handlers, so e.g. disconnectedSince is already cleared when callers see 'connect'.
+      for (const [event, listener] of this.listeners) {
+        this.client.on(event as any, listener as any);
+      }
     });
   }
 
@@ -97,6 +106,7 @@ export class MQTTClient {
     event: E,
     listener: (...args: any[]) => void,
   ): void {
+    this.listeners.push([event, listener]);
     this.client?.on(event, listener as any);
   }
 
@@ -104,6 +114,8 @@ export class MQTTClient {
     event: E,
     listener: (...args: any[]) => void,
   ): void {
+    const i = this.listeners.findIndex(([e, l]) => e === event && l === listener);
+    if (i !== -1) this.listeners.splice(i, 1);
     this.client?.removeListener(event, listener as any);
   }
 
