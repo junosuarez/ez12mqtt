@@ -134,8 +134,8 @@ describe('bridge reducer — max power commands', () => {
   const command = (payload: string): Event => ({ type: 'mqttMessage', topic: 'ez12mqtt/inv/maxPower_W/set', payload });
 
   it('validates against the hardware limits, not the current setting', () => {
-    // index.ts overwrites its `maxPower` limit with the current setting, so after lowering to 600
-    // a later request for 700 was rejected until the next online edge.
+    // The old flag-based index.ts overwrote its `maxPower` limit with the current setting, so after
+    // lowering to 600 a later request for 700 was rejected until the next online edge.
     const { effects } = run(ready(), [
       command('600'),
       { type: 'maxPowerSet', ip: IP, requested_W: 600, ok: true },

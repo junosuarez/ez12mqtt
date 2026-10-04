@@ -1,463 +1,219 @@
+/**
+ * The runner: owns every timer, socket and HTTP call, and nothing else. All behaviour lives in
+ * bridge.ts's pure reducer. Events go in through `dispatch` and are reduced strictly one at a time;
+ * the effects that come back are performed here, and slow ones (inverter HTTP) report back later as
+ * further events. Because only the reducer changes state, and only from inside the drain loop, the
+ * old interleavings — overlapping polls, the restore window racing a poll, shutdown racing its own
+ * publishes — have nowhere to happen.
+ */
 import config from './config.ts';
 import { errorMessage, logger } from './logger.ts';
 import { recordDeviceOnline, recordPollError, recordPollSuccess, startMetricsServer } from './metrics.ts';
-import { EZ1API, type AlarmInfo, type OutputData } from './api.ts';
+import { EZ1API } from './api.ts';
 import { MQTTClient } from './mqtt.ts';
-
-import { publishDiscoveryMessages } from './homeassistant.ts';
+import { discoveryMessages } from './homeassistant.ts';
 import { getSunState, type SunState } from './sun.ts';
+import { initialState, reduce, type Effect, type Event, type State } from './bridge.ts';
 
-/** Null when no location is configured; the app then polls around the clock as before. */
+/** How long to collect retained `info` after each (re)connect: MQTT has no "end of retained" marker. */
+const RESTORE_WINDOW_MS = 2000;
+/** A clean shutdown that hasn't finished by now exits anyway, rather than hang a container stop. */
+const SHUTDOWN_TIMEOUT_MS = 5000;
+
+/** Null when no location is configured; the app then polls around the clock. */
 function currentSun(): SunState | null {
   if (config.latitude === undefined || config.longitude === undefined) return null;
   return getSunState(config.latitude, config.longitude, config.sunElevationThreshold, config.sunNowOverride);
 }
 
-export interface DeviceState {
-  ip: string;
-  nickname?: string;
-  description?: string;
-  deviceId?: string; // Fetched from getDeviceInfo
-  mqttTopic: string; // Base topic for this device
-  isOnline: boolean;
-  lastSeenAt: number | null; // Unix timestamp
-  infoPublished: boolean; // To track if info topic has been published at least once
-  discoveryPublished: boolean; // To track if discovery messages have been published
-  minPower?: number;
-  maxPower?: number;
-}
+const unixNow = () => Math.floor(Date.now() / 1000);
 
 const mqttClient = new MQTTClient();
-const deviceStates: DeviceState[] = [];
 let metricsServer: ReturnType<typeof startMetricsServer> = null;
+let ticker: NodeJS.Timeout | null = null;
+let restoreWindow: NodeJS.Timeout | null = null;
 
-// Initialize device states from config
-config.devices.forEach(deviceConfig => {
-  deviceStates.push({
-    ...deviceConfig,
-    mqttTopic: deviceConfig.nickname || '',
-    isOnline: false,
-    lastSeenAt: null,
-    infoPublished: false,
-    discoveryPublished: false,
-  });
-});
+// ---- the event loop ---------------------------------------------------------------------------
 
-// Subscribed before anything can advertise it: discovery hands Home Assistant this command topic,
-// and a command published before the subscription exists is simply lost (it isn't retained).
-function subscribeToCommands(deviceState: DeviceState): void {
-  if (config.homeAssistantEnable && deviceState.mqttTopic) {
-    mqttClient.subscribe(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W/set`);
-  }
-}
+let state: State = initialState(
+  { baseTopic: config.mqttBaseTopic, homeAssistant: config.homeAssistantEnable },
+  config.devices,
+);
+const queue: Event[] = [];
+let draining = false;
 
-/** For nickname-less devices, whose topic is the device ID once it's learned. */
-function learnTopic(deviceState: DeviceState, deviceId: string): void {
-  if (deviceState.nickname || deviceState.mqttTopic === deviceId) return;
-  deviceState.mqttTopic = deviceId;
-  subscribeToCommands(deviceState);
-}
-
-async function fetchAndPublishInfo(deviceState: DeviceState): Promise<void> {
-  const api = new EZ1API(deviceState.ip);
-  const deviceInfo = await api.getDeviceInfo();
-
-  if (deviceInfo) {
-    deviceState.deviceId = deviceInfo.deviceId;
-    learnTopic(deviceState, deviceInfo.deviceId);
-
-    deviceState.minPower = parseFloat(deviceInfo.minPower);
-    deviceState.maxPower = parseFloat(deviceInfo.maxPower);
-
-    const payload = {
-      observedAt: Math.floor(Date.now() / 1000),
-      deviceIdentifier: deviceInfo.deviceId,
-      deviceVersion: deviceInfo.devVer,
-      wifiNetworkSSID: deviceInfo.ssid,
-      deviceIPAddress: deviceInfo.ipAddr,
-      minimumPowerOutput_W: deviceState.minPower,
-      maximumPowerOutput_W: deviceState.maxPower,
-      deviceDescription: deviceState.description,
-    };
-    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/info`, payload, true);
-    logger.debug(`Published info topic for ${deviceState.mqttTopic}`, { payload });
-    deviceState.infoPublished = true;
-  }
-}
-
-async function fetchAndPublishMaxPower(deviceState: DeviceState): Promise<void> {
-  const api = new EZ1API(deviceState.ip);
-  const maxPower = await api.getMaxPower();
-
-  if (maxPower) {
-    deviceState.maxPower = parseFloat(maxPower.power);
-    const payload = {
-      observedAt: Math.floor(Date.now() / 1000),
-      maximumPowerOutput_W: deviceState.maxPower,
-    };
-    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/maxPower_W`, payload, true);
-    logger.debug(`Published maxPower_W topic for ${deviceState.mqttTopic}`, { payload });
-  }
-}
-
-async function publishEnergyTopic(deviceState: DeviceState, outputData: OutputData | null): Promise<void> {
-  if (outputData) {
-    const payload = {
-      observedAt: Math.floor(Date.now() / 1000),
-      channel1EnergyLifetime_kWh: outputData.te1,
-      channel2EnergyLifetime_kWh: outputData.te2,
-      totalEnergyLifetime_kWh: outputData.te1 + outputData.te2,
-    };
-    mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/energy`, payload, true);
-    logger.debug(`Published energy topic for ${deviceState.mqttTopic}`, { payload });
-  }
-}
-
-/** Published (not retained) on `<base>/<device>/status`; nulls mean "asked and got nothing". */
-interface StatusPayload {
-  observedAt: number;
-  isOnline: boolean;
-  deviceLastSeenAt: number | null;
-  sunAzimuth_deg?: number;
-  sunElevation_deg?: number;
-  isSunUp?: boolean;
-  sunriseAt?: SunState['sunriseAt'];
-  sunsetAt?: SunState['sunsetAt'];
-  isPollSkipped?: boolean;
-  channel1Power_W: number | null;
-  channel1EnergySinceStartup_kWh: number | null;
-  channel2Power_W: number | null;
-  channel2EnergySinceStartup_kWh: number | null;
-  totalPower_W: number | null;
-  totalEnergySinceStartup_kWh: number | null;
-  isOffGrid: boolean | null;
-  isOutputFault: boolean | null;
-  isChannel1ShortCircuit: boolean | null;
-  isChannel2ShortCircuit: boolean | null;
-}
-
-async function fetchAndPublishStatus(deviceState: DeviceState, sun: SunState | null): Promise<OutputData | null> {
-  // The EZ1 is powered from its own PV input, so after dark it is off, not idle — polling
-  // it then just buys two timeouts and a nightly false "outage".
-  const asleep = sun !== null && !sun.isSunUp;
-
-  let outputData: OutputData | null = null;
-  let alarmInfo: AlarmInfo | null = null;
-  if (!asleep) {
-    const api = new EZ1API(deviceState.ip);
-    outputData = await api.getOutputData();
-    alarmInfo = await api.getAlarm();
-  }
-
-  const wasOnline = deviceState.isOnline;
-  deviceState.isOnline = !!outputData;
-
-  const seenAt = Math.floor(Date.now() / 1000);
-  if (deviceState.isOnline) {
-    deviceState.lastSeenAt = seenAt;
-  }
-
-  // Recorded here, where online-ness is actually decided, so the metric cannot drift from the state
-  // the rest of the app acts on. A poll skipped for darkness is neither a success nor an error — it
-  // was never attempted, and counting it either way would corrupt both signals.
-  if (!asleep) {
-    if (deviceState.isOnline) {
-      recordPollSuccess(seenAt);
-    } else {
-      recordPollError();
-    }
-  }
-  recordDeviceOnline(deviceState.nickname || deviceState.ip, deviceState.isOnline);
-
-  // Without a nickname the topic is the device ID, which only getDeviceInfo can tell us. Learn it
-  // before publishing anything: availability is retained and only resent on an online-ness edge,
-  // so one written to `<base>//availability` leaves Home Assistant showing the device unavailable
-  // until the next sunrise. Retried every poll until it succeeds.
-  const hadTopic = !!deviceState.mqttTopic;
-  if (deviceState.isOnline && (!wasOnline || !hadTopic)) {
-    await fetchAndPublishInfo(deviceState);
-  }
-  if (!deviceState.mqttTopic) {
-    logger.debug(`Device ${deviceState.ip} has no topic yet (no nickname, device ID unknown) — not publishing.`);
-    return outputData;
-  }
-
-  if (deviceState.isOnline !== wasOnline || !hadTopic) {
-    mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, deviceState.isOnline ? '1' : '0', true);
-  }
-
-  const payload: StatusPayload = {
-    observedAt: Math.floor(Date.now() / 1000),
-    isOnline: deviceState.isOnline,
-    deviceLastSeenAt: deviceState.lastSeenAt,
-    channel1Power_W: null,
-    channel1EnergySinceStartup_kWh: null,
-    channel2Power_W: null,
-    channel2EnergySinceStartup_kWh: null,
-    totalPower_W: null,
-    totalEnergySinceStartup_kWh: null,
-    isOffGrid: null,
-    isOutputFault: null,
-    isChannel1ShortCircuit: null,
-    isChannel2ShortCircuit: null,
-  };
-
-  if (sun) {
-    payload.sunAzimuth_deg = sun.sunAzimuth_deg;
-    payload.sunElevation_deg = sun.sunElevation_deg;
-    payload.isSunUp = sun.isSunUp;
-    payload.sunriseAt = sun.sunriseAt;
-    payload.sunsetAt = sun.sunsetAt;
-    // Distinguishes "asked and got nothing" from "didn't ask".
-    payload.isPollSkipped = asleep;
-  }
-
-  if (outputData) {
-    payload.channel1Power_W = outputData.p1;
-    payload.channel1EnergySinceStartup_kWh = outputData.e1;
-    payload.channel2Power_W = outputData.p2;
-    payload.channel2EnergySinceStartup_kWh = outputData.e2;
-    payload.totalPower_W = outputData.p1 + outputData.p2;
-    payload.totalEnergySinceStartup_kWh = outputData.e1 + outputData.e2;
-  }
-
-  if (alarmInfo) {
-    payload.isOffGrid = alarmInfo.og === '1';
-    payload.isOutputFault = alarmInfo.oe === '1';
-    payload.isChannel1ShortCircuit = alarmInfo.isce1 === '1';
-    payload.isChannel2ShortCircuit = alarmInfo.isce2 === '1';
-  }
-
-  mqttClient.publish(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/status`, payload);
-  return outputData;
-}
-
-async function pollDevice(deviceState: DeviceState, sun: SunState | null = currentSun()): Promise<void> {
-  if (sun && !sun.isSunUp) {
-    logger.debug(
-      `Sun is down (elevation ${sun.sunElevation_deg}° <= ${config.sunElevationThreshold}°) — skipping poll of ${deviceState.ip}`,
-    );
-  } else {
-    logger.debug(`Polling device: ${deviceState.ip}`);
-  }
-
-  const wasOnline = deviceState.isOnline;
-  const outputData = await fetchAndPublishStatus(deviceState, sun);
-
-  if (deviceState.isOnline && deviceState.mqttTopic) {
-    await publishEnergyTopic(deviceState, outputData);
-    await fetchAndPublishMaxPower(deviceState);
-    if (config.homeAssistantEnable && !deviceState.discoveryPublished) {
-      publishDiscoveryMessages(deviceState, mqttClient);
-      deviceState.discoveryPublished = true;
-    }
-  }
-
-  if (deviceState.isOnline && !wasOnline) {
-    // Info was already fetched by fetchAndPublishStatus, before anything was published.
-    logger.info(`Device ${deviceState.ip} is now online.`);
-  } else if (!deviceState.isOnline && wasOnline) {
-    // Going offline at dusk is expected; warning nightly trains you to ignore the warning.
-    if (sun && !sun.isSunUp) {
-      logger.info(`Device ${deviceState.ip} is asleep for the night (sun below horizon).`);
-    } else {
-      logger.warn(`Device ${deviceState.ip} went offline.`);
-    }
-  }
-}
-
-/** The fields restoreState reads back from a retained `info` message (see fetchAndPublishInfo). */
-interface RetainedInfo {
-  deviceIdentifier: string;
-  deviceIPAddress?: string;
-  minimumPowerOutput_W?: number;
-  maximumPowerOutput_W?: number;
-}
-
-/** Retained messages are whatever is on the broker — possibly hand-written or from an older
- * version — so check the shape instead of trusting it. Null if it isn't usable. */
-function parseRetainedInfo(messageString: string): RetainedInfo | null {
-  let parsed: unknown;
+/** The only way anything happens. Safe to call from anywhere, including from inside perform(). */
+function dispatch(event: Event): void {
+  queue.push(event);
+  if (draining) return;
+  draining = true;
   try {
-    parsed = JSON.parse(messageString);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const p = parsed as Record<string, unknown>;
-  if (typeof p.deviceIdentifier !== 'string' || !p.deviceIdentifier) return null;
-  return {
-    deviceIdentifier: p.deviceIdentifier,
-    deviceIPAddress: typeof p.deviceIPAddress === 'string' ? p.deviceIPAddress : undefined,
-    minimumPowerOutput_W: typeof p.minimumPowerOutput_W === 'number' ? p.minimumPowerOutput_W : undefined,
-    maximumPowerOutput_W: typeof p.maximumPowerOutput_W === 'number' ? p.maximumPowerOutput_W : undefined,
-  };
-}
-
-async function restoreState(): Promise<void> {
-  return new Promise((resolve) => {
-    const wildcardTopic = `${config.mqttBaseTopic}/#`;
-    mqttClient.subscribe(wildcardTopic);
-
-    const restoreMessageHandler = (topic: string, message: Buffer) => {
-      const messageString = message.toString();
-      logger.debug(`Restoring state from topic: ${topic}`, { payload: messageString });
-
-      const infoTopicRegex = new RegExp(`^${config.mqttBaseTopic}/(.+)/info$`);
-      const match = topic.match(infoTopicRegex);
-
-      if (match) {
-        const deviceTopic = match[1];
-        const payload = parseRetainedInfo(messageString);
-        if (!payload) {
-          logger.warn(`Ignoring unusable retained info on ${topic}`);
-          return;
-        }
-        // A nickname-less device's topic is its device ID, which is exactly what we're trying to
-        // restore — so until it's known, the only link to its retained info is the IP it reported.
-        const deviceState = deviceStates.find(d =>
-          d.mqttTopic === deviceTopic ||
-          d.nickname === deviceTopic ||
-          (!d.mqttTopic && payload.deviceIPAddress === d.ip));
-        if (deviceState) {
-          deviceState.deviceId = payload.deviceIdentifier;
-          deviceState.minPower = payload.minimumPowerOutput_W;
-          deviceState.maxPower = payload.maximumPowerOutput_W;
-          learnTopic(deviceState, payload.deviceIdentifier);
-        }
-      }
-    };
-
-    mqttClient.on('message', restoreMessageHandler);
-
-    const restoreTimeout = setTimeout(() => {
-      logger.info('State restoration complete.');
-      mqttClient.removeListener('message', restoreMessageHandler);
-      mqttClient.unsubscribe(wildcardTopic);
-      resolve();
-    }, 2000); // Wait 2 seconds for all retained messages
-  });
-}
-
-// Runs once per successful (re)connect — not just the first one. A publish attempted while
-// disconnected is dropped, not queued, so any retained topic (info, maxPower, discovery,
-// availability) for a device that came online during an outage needs a deliberate resend once
-// the broker is reachable again, rather than waiting for the device's next offline→online edge.
-async function onMqttConnected(): Promise<void> {
-  // First, before restoreState's wait: the poll loop keeps running meanwhile and may publish
-  // discovery, and topics learned later subscribe in learnTopic.
-  for (const deviceState of deviceStates) {
-    subscribeToCommands(deviceState);
-  }
-
-  await restoreState();
-
-  for (const deviceState of deviceStates) {
-    if (deviceState.isOnline) {
-      await fetchAndPublishInfo(deviceState);
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      logger.debug(`event: ${next.type}`, 'ip' in next ? { ip: next.ip } : undefined);
+      const result = reduce(state, next);
+      state = result.state;
+      for (const effect of result.effects) perform(effect);
     }
-    // Still unknown: learnTopic subscribes once a later poll learns it.
-    if (!deviceState.mqttTopic) continue;
-
-    if (deviceState.isOnline) {
-      mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '1', true);
-      await fetchAndPublishMaxPower(deviceState);
-    }
-
-    // Online or not: an inverter asleep at startup still has an identity restored from its retained
-    // info, and Home Assistant should know about it before sunrise rather than only after.
-    if (config.homeAssistantEnable && deviceState.deviceId) {
-      publishDiscoveryMessages(deviceState, mqttClient);
-      deviceState.discoveryPublished = true;
-    }
+  } catch (error: unknown) {
+    // A throw here is a reducer bug, and state may be half-applied. Restarting beats limping on.
+    logger.error('Event loop crashed', { error: errorMessage(error), stack: error instanceof Error ? error.stack : undefined });
+    process.exit(1);
+  } finally {
+    draining = false;
   }
 }
 
-async function main(): Promise<void> {
-  // BEFORE the MQTT connect, deliberately: `connect()` resolves only once the broker answers, so
-  // starting the endpoint afterwards would mean the one situation `mqtt_connected` exists to report
-  // — the broker being unreachable — is also the situation where nothing is listening to report it.
-  metricsServer = startMetricsServer({
-    mqttConnected: () => mqttClient.connected,
-    pollingExpected: () => {
-      const sun = currentSun();
-      return sun === null || sun.isSunUp;
-    },
-    sunElevationDeg: () => currentSun()?.sunElevation_deg ?? null,
-    mqttDisconnectedForMs: () => mqttClient.disconnectedForMs(),
-  });
-
-  mqttClient.on('message', (topic, message) => {
-    const messageString = message.toString();
-    logger.debug(`Received message on topic: ${topic}`, { payload: messageString });
-
-    const setMaxPowerRegex = new RegExp(`^${config.mqttBaseTopic}/(.+)/maxPower_W/set$`);
-    const match = topic.match(setMaxPowerRegex);
-
-    if (match) {
-      const deviceTopic = match[1];
-      const deviceState = deviceStates.find(d => d.mqttTopic === deviceTopic);
-
-      if (deviceState) {
-        const power = parseInt(messageString, 10);
-        if (!isNaN(power) && deviceState.minPower && deviceState.maxPower && power >= deviceState.minPower && power <= deviceState.maxPower) {
-          logger.info(`Setting max power for ${deviceTopic} to ${power}`);
-          const api = new EZ1API(deviceState.ip);
-          api.setMaxPower(power).then(() => {
-            logger.debug(`setMaxPower successful for ${deviceTopic}. Re-publishing maxPower topic.`);
-            fetchAndPublishMaxPower(deviceState);
-          }).catch((error: unknown) => {
-            logger.error(`Failed to set max power for ${deviceTopic}: ${errorMessage(error)}`);
-          });
-        } else {
-          logger.warn(`Invalid power value received for ${deviceTopic}: ${messageString}`);
-        }
-      } else {
-        logger.warn(`Received setMaxPower command for unknown device: ${deviceTopic}`);
-      }
-    }
-  });
-
-  // Fires on the first connect AND every reconnect (mqtt.js re-emits 'connect' each time).
-  mqttClient.on('connect', () => {
-    onMqttConnected().catch((error: unknown) => logger.error('onMqttConnected failed', { error: errorMessage(error) }));
-  });
-
-  // Not awaited: mqtt.js retries internally (see mqtt.ts), and the inverter poll loop below must
-  // never wait on the broker. A stuck first connect attempt used to block everything after it,
-  // including polling, leaving the process silently idle for as long as the broker was unreachable.
-  void mqttClient.connect();
-
-  // Initial poll for all devices, independent of MQTT connectivity.
-  for (const deviceState of deviceStates) {
-    await pollDevice(deviceState);
-  }
-
-  // Set up polling interval
-  setInterval(async () => {
-    const sun = currentSun();
-    for (const deviceState of deviceStates) {
-      await pollDevice(deviceState, sun);
-    }
-  }, config.pollInterval * 1000);
+/** Runs slow I/O off the loop and reports back as an event. Never rejects: a failure becomes the
+ * fallback event, so a device can't be left marked in-flight forever. */
+function request(work: () => Promise<Event>, fallback: () => Event): void {
+  work()
+    .catch((error: unknown) => {
+      logger.error('Request failed unexpectedly', { error: errorMessage(error) });
+      return fallback();
+    })
+    .then(dispatch);
 }
 
-function shutdown() {
+function perform(effect: Effect): void {
+  switch (effect.type) {
+    case 'fetchStatus': {
+      const { ip, sun } = effect;
+      const api = new EZ1API(ip);
+      request(
+        async () => {
+          const output = await api.getOutputData();
+          const alarm = await api.getAlarm();
+          return { type: 'statusFetched', ip, now: unixNow(), sun, output, alarm };
+        },
+        () => ({ type: 'statusFetched', ip, now: unixNow(), sun, output: null, alarm: null }),
+      );
+      return;
+    }
+    case 'fetchInfo': {
+      const { ip } = effect;
+      request(
+        async () => ({ type: 'infoFetched', ip, now: unixNow(), info: await new EZ1API(ip).getDeviceInfo() }),
+        () => ({ type: 'infoFetched', ip, now: unixNow(), info: null }),
+      );
+      return;
+    }
+    case 'fetchMaxPower': {
+      const { ip } = effect;
+      request(
+        async () => {
+          const power = parseFloat((await new EZ1API(ip).getMaxPower())?.power ?? '');
+          return { type: 'maxPowerFetched', ip, now: unixNow(), power_W: Number.isFinite(power) ? power : null };
+        },
+        () => ({ type: 'maxPowerFetched', ip, now: unixNow(), power_W: null }),
+      );
+      return;
+    }
+    case 'setMaxPower': {
+      const { ip, power_W } = effect;
+      request(
+        // EZ1API returns null on any failure rather than throwing.
+        async () => ({ type: 'maxPowerSet', ip, requested_W: power_W, ok: (await new EZ1API(ip).setMaxPower(power_W)) !== null }),
+        () => ({ type: 'maxPowerSet', ip, requested_W: power_W, ok: false }),
+      );
+      return;
+    }
+    case 'publishDevice':
+      mqttClient.publishRaw(`${config.mqttBaseTopic}/${effect.address}/${effect.subtopic}`, effect.payload, effect.retain);
+      return;
+    case 'publishBridgeStatus':
+      mqttClient.publishBridgeStatus(effect.online);
+      return;
+    case 'subscribe':
+      mqttClient.subscribe(effect.topic);
+      return;
+    case 'unsubscribe':
+      mqttClient.unsubscribe(effect.topic);
+      return;
+    case 'announce': {
+      logger.info(`Publishing Home Assistant discovery messages for device ${effect.deviceId}`);
+      const messages = discoveryMessages({
+        baseTopic: config.mqttBaseTopic,
+        discoveryPrefix: config.homeAssistantDiscoveryPrefix,
+        address: effect.address,
+        deviceId: effect.deviceId,
+        name: effect.name,
+        limits: effect.limits,
+      });
+      for (const { topic, payload } of messages) mqttClient.publish(topic, payload, true);
+      return;
+    }
+    case 'startRestoreWindow':
+      // A reconnect inside the window must not be closed early by the previous connection's timer.
+      if (restoreWindow) clearTimeout(restoreWindow);
+      restoreWindow = setTimeout(() => {
+        restoreWindow = null;
+        logger.info('State restoration complete.');
+        dispatch({ type: 'restoreWindowClosed' });
+      }, RESTORE_WINDOW_MS);
+      return;
+    case 'recordPoll':
+      if (effect.ok) recordPollSuccess(effect.at);
+      else recordPollError();
+      return;
+    case 'recordDeviceOnline':
+      recordDeviceOnline(effect.device, effect.online);
+      return;
+    case 'log':
+      logger[effect.level](effect.message);
+      return;
+    case 'exit':
+      void exit();
+      return;
+    default: {
+      const unhandled: never = effect;
+      throw new Error(`Unhandled effect: ${JSON.stringify(unhandled)}`);
+    }
+  }
+}
+
+async function exit(): Promise<void> {
   logger.info('Shutting down...');
+  if (ticker) clearInterval(ticker);
+  if (restoreWindow) clearTimeout(restoreWindow);
   metricsServer?.close();
-  for (const deviceState of deviceStates) {
-    if (deviceState.isOnline && deviceState.mqttTopic) {
-      mqttClient.publishRaw(`${config.mqttBaseTopic}/${deviceState.mqttTopic}/availability`, '0', true);
-    }
-  }
-  mqttClient.disconnect();
+  setTimeout(() => {
+    logger.warn(`Clean shutdown took over ${SHUTDOWN_TIMEOUT_MS}ms; exiting anyway.`);
+    process.exit(0);
+  }, SHUTDOWN_TIMEOUT_MS).unref();
+  // Awaited, not fire-and-forget: the reducer's final `availability 0` publishes are queued ahead of
+  // the DISCONNECT, and exiting before it goes out is how they used to be lost.
+  await mqttClient.disconnect();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+// ---- wiring -----------------------------------------------------------------------------------
 
-main().catch((error: unknown) => {
-  logger.error('Application crashed:', { error: errorMessage(error), stack: error instanceof Error ? error.stack : undefined });
-  process.exit(1);
+// BEFORE the MQTT connect, deliberately: `connect()` resolves only once the broker answers, so
+// starting the endpoint afterwards would mean the one situation `mqtt_connected` exists to report
+// — the broker being unreachable — is also the situation where nothing is listening to report it.
+metricsServer = startMetricsServer({
+  mqttConnected: () => mqttClient.connected,
+  pollingExpected: () => {
+    const sun = currentSun();
+    return sun === null || sun.isSunUp;
+  },
+  sunElevationDeg: () => currentSun()?.sunElevation_deg ?? null,
+  mqttDisconnectedForMs: () => mqttClient.disconnectedForMs(),
 });
+
+// mqtt.js emits 'connect' on every successful reconnect, and 'close' on every drop or failed attempt.
+mqttClient.on('connect', () => dispatch({ type: 'mqttConnected' }));
+mqttClient.on('close', () => dispatch({ type: 'mqttDisconnected' }));
+mqttClient.on('message', (topic, payload) => dispatch({ type: 'mqttMessage', topic, payload: payload.toString() }));
+
+// Not awaited: mqtt.js retries internally (see mqtt.ts), and polling must never wait on the broker.
+void mqttClient.connect();
+
+// A tick never overlaps a poll in flight — the reducer skips busy devices — so a plain interval is safe.
+const tick = () => dispatch({ type: 'tick', now: unixNow(), sun: currentSun() });
+tick();
+ticker = setInterval(tick, config.pollInterval * 1000);
+
+process.on('SIGINT', () => dispatch({ type: 'shutdown' }));
+process.on('SIGTERM', () => dispatch({ type: 'shutdown' }));

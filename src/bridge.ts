@@ -1,11 +1,11 @@
 /**
  * The bridge's behaviour as a pure reducer: `reduce(state, event) → { state, effects }`.
  *
- * PROTOTYPE — not yet wired into index.ts. The intent is that a small runner owns all I/O: it feeds
- * events (timer ticks, inverter HTTP results, MQTT connect/messages, SIGTERM) into `reduce` ONE AT A
- * TIME, then performs the returned effects in order, turning their results back into events. Nothing
- * else mutates state, so there are no interleavings to reason about: a poll can't overlap the last
- * one, the restore window can't race a poll, and shutdown can't race its own publishes.
+ * index.ts is the runner that owns all I/O: it feeds events (timer ticks, inverter HTTP results,
+ * MQTT connect/messages, SIGTERM) into `reduce` ONE AT A TIME, then performs the returned effects in
+ * order, turning their results back into events. Nothing else mutates state, so there are no
+ * interleavings to reason about: a poll can't overlap the last one, the restore window can't race a
+ * poll, and shutdown can't race its own publishes.
  *
  * The types carry the invariants the old flag-based DeviceState kept getting wrong:
  * - A device-scoped publish needs an `Address`, which only `addressOf` mints, and only once the
@@ -14,8 +14,8 @@
  *   command subscriptions were emitted on `mqttConnected` — so advertising a command topic before
  *   subscribing to it (#14) can't happen.
  * - Hardware limits (from getDeviceInfo) and the current power setting (from getMaxPower) are
- *   separate fields. index.ts stores both in `maxPower`, so lowering the setting also lowers the
- *   limit commands are validated against.
+ *   separate fields. The previous implementation stored both in one `maxPower`, so lowering the
+ *   setting also lowered the limit commands were validated against.
  */
 import type { AlarmInfo, DeviceInfo, OutputData } from './api.ts';
 import type { SunState } from './sun.ts';
@@ -397,8 +397,9 @@ function applyStatus(
     const address = addressOf(x);
     if (!address || !canPublish(state.conn)) return x;
 
-    // Unlike index.ts, the first result publishes availability even when it's offline: a crash
-    // never got to write `0`, and a stale retained `1` would otherwise outlive it until sunrise.
+    // The first result publishes availability even when it's offline (the old flag-based code
+    // didn't): a crash never got to write `0`, and a stale retained `1` would otherwise outlive it
+    // until sunrise.
     if (isOnline(link) !== isOnline(d.link) || d.link === 'unknown') effects.push(availability(address, link));
     effects.push(publish(address, 'status', statusPayload(x, now, sun, skipped, output, alarm), false));
     if (output) {

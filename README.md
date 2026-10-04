@@ -418,4 +418,4 @@ Published at every poll interval.
 #### Set Max Power
 
 - **Topic:** `<MQTT_BASE_TOPIC>/<device_topic>/maxPower_W/set`
-- **Payload:** A number representing the desired max power in Watts.
+- **Payload:** A whole number of watts within the device's hardware limits (from its `info` topic). Home Assistant's float form (`600.0`) is accepted; anything else, like `600abc` or an out-of-range value, is rejected and logged.
