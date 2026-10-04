@@ -138,7 +138,7 @@ The bridge connects with TLS (`mqtts://`, port 8883) by default and verifies the
 - The files are read at startup: a missing or unreadable one stops the bridge with an error naming the variable. Contradictory settings (e.g. `MQTT_INSECURE` with `MQTT_CA_FILE`) are errors too, rather than a guess that might mean cleartext.
 - In a container, mount the files read-only and point the variables at the mount, e.g. `-v ./certs:/certs:ro -e MQTT_CA_FILE=/certs/ca.pem`. The image runs as the `node` user, so the files must be readable by it.
 
-**Upgrading from a version that defaulted to plain MQTT:** if your broker doesn't use TLS, add `MQTT_INSECURE=true`. Without it the bridge can't connect, and logs a hint saying so: `If this broker only speaks plain MQTT (typically port 1883), set MQTT_INSECURE=true.`
+**Upgrading from 1.x** (TLS became the default in 2.0.0; see [CHANGELOG.md](CHANGELOG.md)): if your broker doesn't use TLS, add `MQTT_INSECURE=true`. Without it the bridge can't connect, and logs a hint saying so: `If this broker only speaks plain MQTT (typically port 1883), set MQTT_INSECURE=true.`
 
 ### Solar position
 
