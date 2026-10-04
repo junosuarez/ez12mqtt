@@ -13,7 +13,8 @@ describe('config — numbers are all-or-nothing', () => {
     const { config, errors, warnings } = parseConfig(base);
     assert.deepEqual(errors, []);
     assert.deepEqual(warnings, []);
-    assert.equal(config.mqttPort, 1883);
+    assert.equal(config.mqttPort, 8883, 'TLS by default, on its registered port');
+    assert.deepEqual(config.mqttTls, {});
     assert.equal(config.pollInterval, 30);
     assert.equal(config.sunElevationThreshold, -6);
     assert.equal(config.metricsPort, undefined);
@@ -114,35 +115,49 @@ describe('config — MQTT over TLS (#23)', () => {
   };
   const parse = (env: Record<string, string>) => parseConfig({ ...base, ...env }, readFile);
 
-  it('stays plain mqtt on 1883 by default, so existing setups are unaffected', () => {
-    const { config, errors } = parse({});
+  it('uses verified TLS on 8883 by default', () => {
+    const { config, errors, warnings } = parse({});
+    assert.deepEqual([errors, warnings], [[], []]);
+    assert.deepEqual(config.mqttTls, {});
+    assert.equal(config.mqttPort, 8883);
+  });
+
+  it('uses plain mqtt on 1883 only with MQTT_INSECURE=true', () => {
+    const { config, errors } = parse({ MQTT_INSECURE: 'true' });
     assert.deepEqual(errors, []);
     assert.equal(config.mqttTls, undefined);
     assert.equal(config.mqttPort, 1883);
   });
 
-  it('defaults to 8883 with TLS, and still honours an explicit MQTT_PORT', () => {
-    assert.equal(parse({ MQTT_TLS: 'true' }).config.mqttPort, 8883);
-    assert.equal(parse({ MQTT_TLS: 'true', MQTT_PORT: '18883' }).config.mqttPort, 18883);
+  it('honours an explicit MQTT_PORT either way', () => {
+    assert.equal(parse({ MQTT_PORT: '18883' }).config.mqttPort, 18883);
+    assert.equal(parse({ MQTT_INSECURE: 'true', MQTT_PORT: '1884' }).config.mqttPort, 1884);
   });
 
   it('reads the CA and client certificate at startup', () => {
-    const { config, errors } = parse({
-      MQTT_TLS: 'true', MQTT_CA_FILE: '/certs/ca.pem', MQTT_CERT_FILE: '/certs/client.pem', MQTT_KEY_FILE: '/certs/client.key',
-    });
+    const { config, errors } = parse({ MQTT_CA_FILE: '/certs/ca.pem', MQTT_CERT_FILE: '/certs/client.pem', MQTT_KEY_FILE: '/certs/client.key' });
     assert.deepEqual(errors, []);
     assert.deepEqual(config.mqttTls, { ca: 'CA', cert: 'CERT', key: 'KEY' });
   });
 
   it('fails at startup when a referenced file is missing, naming it', () => {
-    assert.match(parse({ MQTT_TLS: 'true', MQTT_CA_FILE: '/nope.pem' }).errors.join(), /MQTT_CA_FILE could not be read from "\/nope.pem" \(ENOENT\)/);
+    assert.match(parse({ MQTT_CA_FILE: '/nope.pem' }).errors.join(), /MQTT_CA_FILE could not be read from "\/nope.pem" \(ENOENT\)/);
   });
 
   it('requires a client certificate and key together', () => {
-    assert.match(parse({ MQTT_TLS: 'true', MQTT_CERT_FILE: '/certs/client.pem' }).errors.join(), /MQTT_CERT_FILE and MQTT_KEY_FILE/);
+    assert.match(parse({ MQTT_CERT_FILE: '/certs/client.pem' }).errors.join(), /MQTT_CERT_FILE and MQTT_KEY_FILE/);
   });
 
-  it('rejects TLS files without MQTT_TLS=true, rather than silently connecting in cleartext', () => {
-    assert.match(parse({ MQTT_CA_FILE: '/certs/ca.pem' }).errors.join(), /only apply with MQTT_TLS=true/);
+  it('allows skipping verification, with a warning every startup', () => {
+    const { config, errors, warnings } = parse({ MQTT_TLS_SKIP_VERIFY: 'true' });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(config.mqttTls, { skipVerify: true });
+    assert.match(warnings.join(), /not verified/);
+  });
+
+  it('rejects contradictory settings rather than guess which was meant', () => {
+    assert.match(parse({ MQTT_INSECURE: 'true', MQTT_CA_FILE: '/certs/ca.pem' }).errors.join(), /MQTT_INSECURE=true turns TLS off, so MQTT_CA_FILE/);
+    assert.match(parse({ MQTT_INSECURE: 'true', MQTT_TLS_SKIP_VERIFY: 'true' }).errors.join(), /MQTT_TLS_SKIP_VERIFY/);
+    assert.match(parse({ MQTT_TLS_SKIP_VERIFY: 'true', MQTT_CA_FILE: '/certs/ca.pem' }).errors.join(), /ignores MQTT_CA_FILE/);
   });
 });

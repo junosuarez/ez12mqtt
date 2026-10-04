@@ -26,7 +26,9 @@ services:
     environment:
       # -- Required: MQTT Broker Configuration --
       - MQTT_HOST=your-mqtt-broker-ip
-      - MQTT_PORT=1883
+      # Connects with TLS on port 8883 by default (see "MQTT over TLS" below). For a broker that
+      # only speaks plain MQTT, such as a default Mosquitto on 1883, uncomment:
+      # - MQTT_INSECURE=true
       # - MQTT_USER=your-mqtt-user
       # - MQTT_PASSWORD=your-mqtt-password
 
@@ -77,6 +79,8 @@ services:
     restart: unless-stopped
     environment:
       - MQTT_HOST=mqtt-broker
+      # The Mosquitto above is plain MQTT; the bridge defaults to TLS.
+      - MQTT_INSECURE=true
       - DEVICE_1_IP=mock-ez1
       - DEVICE_1_NICKNAME=mock_inverter
       - HOMEASSISTANT_ENABLE=true
@@ -106,11 +110,12 @@ services:
 | `DEVICE_{n}_NICKNAME`    | The nickname of the {n}th device, used as its MQTT topic level. Unique; no `/`, `+` or `#`.  |             |
 | `DEVICE_{n}_DESCRIPTION` | The description of the {n}th device.                                                         |             |
 | `MQTT_HOST`              | The hostname or IP address of the MQTT broker.                                               | `localhost` |
-| `MQTT_PORT`              | The port of the MQTT broker.                                                                 | `1883`, or `8883` with `MQTT_TLS` |
+| `MQTT_PORT`              | The port of the MQTT broker.                                                                 | `8883`, or `1883` with `MQTT_INSECURE` |
 | `MQTT_USER`              | The username for MQTT authentication.                                                        |             |
 | `MQTT_PASSWORD`          | The password for MQTT authentication.                                                        |             |
-| `MQTT_TLS`               | `true` to connect over TLS (`mqtts://`). The broker's certificate is always verified.       | `false`     |
-| `MQTT_CA_FILE`           | Path to a PEM CA bundle, for a broker whose certificate isn't from a publicly trusted CA.   |             |
+| `MQTT_INSECURE`          | `true` to connect over plain MQTT (`mqtt://`) instead of TLS.                                | `false`     |
+| `MQTT_CA_FILE`           | Path to a PEM CA bundle to trust: a private CA, or a self-signed broker's own certificate.  |             |
+| `MQTT_TLS_SKIP_VERIFY`   | `true` to accept any broker certificate: encrypted, but not authenticated. Prefer `MQTT_CA_FILE`. | `false` |
 | `MQTT_CERT_FILE`         | Path to a PEM client certificate, for brokers that require mutual TLS. Needs `MQTT_KEY_FILE`. |           |
 | `MQTT_KEY_FILE`          | Path to the client certificate's PEM private key. Needs `MQTT_CERT_FILE`.                    |             |
 | `MQTT_BASE_TOPIC`        | The base topic for all MQTT messages. May have levels (`home/solar`); no `+`, `#` or `//`.  | `ez12mqtt`  |
@@ -123,12 +128,17 @@ services:
 
 ### MQTT over TLS
 
-Plain `mqtt://` is the default and fine on a trusted LAN or inside a cluster. If the broker is reached over anything else, set `MQTT_TLS=true`: otherwise `MQTT_USER`/`MQTT_PASSWORD`, every reading, and the `maxPower_W/set` commands that change inverter output all cross the network in cleartext.
+The bridge connects with TLS (`mqtts://`, port 8883) by default and verifies the broker's certificate. Otherwise `MQTT_USER`/`MQTT_PASSWORD`, every reading, and the `maxPower_W/set` commands that change inverter output would cross the network in cleartext.
 
-- The broker's certificate is always verified; there is no setting to skip that. For a broker using a private or self-signed CA, point `MQTT_CA_FILE` at that CA.
-- For mutual TLS, set both `MQTT_CERT_FILE` and `MQTT_KEY_FILE`.
-- The files are read at startup: a missing or unreadable one stops the bridge with an error naming the variable, rather than failing later at connect. The `*_FILE` variables without `MQTT_TLS=true` are also an error, so a typo can't quietly leave the connection unencrypted.
-- In a container, mount the files read-only and point the variables at the mount, e.g. `-v ./certs:/certs:ro -e MQTT_TLS=true -e MQTT_CA_FILE=/certs/ca.pem`. The image runs as the `node` user, so the files must be readable by it.
+- **Plain MQTT:** set `MQTT_INSECURE=true` (port defaults to 1883). Reasonable on a trusted LAN or inside a cluster.
+- **Private CA:** set `MQTT_CA_FILE` to the CA's certificate.
+- **Self-signed broker:** set `MQTT_CA_FILE` to the broker's certificate itself. The connection stays fully verified; only that certificate is trusted.
+- **Skip verification:** `MQTT_TLS_SKIP_VERIFY=true` accepts any certificate. The traffic is encrypted, but anything in the network path can impersonate the broker, so the bridge warns about it at every startup. Prefer `MQTT_CA_FILE`.
+- **Mutual TLS:** set both `MQTT_CERT_FILE` and `MQTT_KEY_FILE`.
+- The files are read at startup: a missing or unreadable one stops the bridge with an error naming the variable. Contradictory settings (e.g. `MQTT_INSECURE` with `MQTT_CA_FILE`) are errors too, rather than a guess that might mean cleartext.
+- In a container, mount the files read-only and point the variables at the mount, e.g. `-v ./certs:/certs:ro -e MQTT_CA_FILE=/certs/ca.pem`. The image runs as the `node` user, so the files must be readable by it.
+
+**Upgrading from a version that defaulted to plain MQTT:** if your broker doesn't use TLS, add `MQTT_INSECURE=true`. Without it the bridge can't connect, and logs a hint saying so: `If this broker only speaks plain MQTT (typically port 1883), set MQTT_INSECURE=true.`
 
 ### Solar position
 
@@ -187,7 +197,7 @@ DEVICE_1_NICKNAME=inverter_garage
 DEVICE_1_DESCRIPTION="EZ1 Microinverter in the garage"
 DEVICE_2_IP=192.168.1.101
 MQTT_HOST=my-mqtt-broker
-MQTT_PORT=1883
+MQTT_CA_FILE=/certs/broker-ca.pem
 MQTT_USER=mqttuser
 MQTT_PASSWORD=mqttpass
 MQTT_BASE_TOPIC=home/solar

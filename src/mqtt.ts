@@ -22,9 +22,9 @@ export function brokerConnection(settings: BrokerSettings): { url: string; optio
       ...(settings.mqttUser && { username: settings.mqttUser }),
       ...(settings.mqttPassword && { password: settings.mqttPassword }),
       ...(tls && {
-        // Explicit rather than relying on the default: verification is the whole point, and there's
-        // deliberately no setting that turns it off.
-        rejectUnauthorized: true,
+        // Explicit rather than relying on mqtt.js's default: verification is the point of TLS, and
+        // only MQTT_TLS_SKIP_VERIFY (which warns at startup) turns it off.
+        rejectUnauthorized: !tls.skipVerify,
         ...(tls.ca && { ca: tls.ca }),
         ...(tls.cert && { cert: tls.cert }),
         ...(tls.key && { key: tls.key }),
@@ -37,6 +37,26 @@ export function brokerConnection(settings: BrokerSettings): { url: string; optio
       },
     },
   };
+}
+
+/** Node's codes for "the chain doesn't lead to anything trusted": a private CA or self-signed broker. */
+const UNTRUSTED_CERT = new Set(['DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE']);
+
+/**
+ * The fix for the two connection failures TLS-by-default makes likely, logged once per process.
+ * A broker that only speaks plain MQTT fails with nothing listening on 8883 (ECONNREFUSED) or by
+ * dropping the TLS handshake (ECONNRESET); both have other causes too, hence "if". An untrusted
+ * certificate gets Node's own advice (--use-system-ca), which is the wrong fix here.
+ */
+export function connectionHint(url: string, code: string | undefined): string | null {
+  if (!url.startsWith('mqtts:') || code === undefined) return null;
+  if (code === 'ECONNREFUSED' || code === 'ECONNRESET') {
+    return 'Connecting with TLS (the default). If this broker only speaks plain MQTT (typically port 1883), set MQTT_INSECURE=true.';
+  }
+  if (UNTRUSTED_CERT.has(code)) {
+    return "The broker's certificate isn't trusted. For a private CA, set MQTT_CA_FILE to the CA's certificate; for a self-signed broker, to the broker's own certificate.";
+  }
+  return null;
 }
 
 type ClientEvent = keyof MqttClientEventCallbacks;
@@ -64,6 +84,7 @@ export class MQTTClient {
   private readonly listeners: Registration[] = [];
 
   private readonly connectFn: typeof mqtt.connect;
+  private hinted = false;
 
   /** connectFn is injectable so tests can drive a fake client without a real broker or module
    * mocking — Node's strip-only TS mode doesn't support constructor parameter properties. */
@@ -102,7 +123,14 @@ export class MQTTClient {
       });
 
       this.client.on('error', (error) => {
-        logger.error(`MQTT connection error: ${error.message}`);
+        // ECONNREFUSED comes with an empty message, which used to log as a bare "MQTT connection error: ".
+        const code = 'code' in error && error.code !== undefined ? String(error.code) : undefined;
+        logger.error(`MQTT connection error: ${[code, error.message].filter(Boolean).join(': ')}`);
+        const hint = connectionHint(this.mqttUrl, code);
+        if (hint && !this.hinted) {
+          this.hinted = true;
+          logger.warn(hint);
+        }
         if (this.disconnectedSince === null) this.disconnectedSince = Date.now();
         // NOT client.end() here: that call stops mqtt.js's own reconnect loop entirely (it does
         // not "trigger" one, despite the old comment) — it is exactly why a failed *first* connect

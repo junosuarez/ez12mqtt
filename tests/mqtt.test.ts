@@ -125,6 +125,20 @@ describe('brokerConnection — TLS (#23)', async () => {
     assert.deepEqual([options.ca, options.cert, options.key], ['CA', 'CERT', 'KEY']);
   });
 
+  it('turns verification off only for skipVerify', () => {
+    assert.equal(brokerConnection({ ...settings, mqttTls: { skipVerify: true } }).options.rejectUnauthorized, false);
+  });
+
+  it('hints at the right fix for the failures TLS-by-default makes likely', async () => {
+    const { connectionHint } = await import('../src/mqtt.ts');
+    assert.match(connectionHint('mqtts://broker:8883', 'ECONNREFUSED') ?? '', /MQTT_INSECURE=true/);
+    assert.match(connectionHint('mqtts://broker:1883', 'ECONNRESET') ?? '', /MQTT_INSECURE=true/);
+    assert.match(connectionHint('mqtts://broker:8883', 'DEPTH_ZERO_SELF_SIGNED_CERT') ?? '', /MQTT_CA_FILE/);
+    assert.match(connectionHint('mqtts://broker:8883', 'SELF_SIGNED_CERT_IN_CHAIN') ?? '', /MQTT_CA_FILE/);
+    assert.equal(connectionHint('mqtt://broker:1883', 'ECONNREFUSED'), null, 'already plain: nothing TLS-specific to suggest');
+    assert.equal(connectionHint('mqtts://broker:8883', 'ENOTFOUND'), null, 'not a TLS problem');
+  });
+
   it('keeps verification on even with no CA file (the system trust store applies)', () => {
     const { options } = brokerConnection({ ...settings, mqttTls: {} });
     assert.equal(options.rejectUnauthorized, true);

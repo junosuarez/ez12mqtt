@@ -45,7 +45,8 @@ interface TestOptions {
   // inverter. Also asserts nothing is ever published to `<base>//…` (#9).
   nicknameless?: boolean;
   // The broker listens on TLS only (8883), with a certificate from a throwaway CA the bridge is given
-  // via MQTT_CA_FILE (#23). MQTT_PORT is left unset, so this also covers the 8883 default.
+  // via MQTT_CA_FILE (#23). The bridge gets no MQTT_PORT or MQTT_INSECURE, so this is the default
+  // configuration: TLS, verified, on 8883. Every other scenario opts out with MQTT_INSECURE=true.
   tls?: boolean;
 }
 
@@ -161,7 +162,7 @@ async function runTest(options: TestOptions, logOnPass: boolean) {
     .withNetwork(network)
     .withEnvironment({
       MQTT_HOST: 'mqtt-broker',
-      ...(certs ? { MQTT_TLS: 'true', MQTT_CA_FILE: '/certs/ca.pem' } : { MQTT_PORT: '1883' }),
+      ...(certs ? { MQTT_CA_FILE: '/certs/ca.pem' } : { MQTT_INSECURE: 'true', MQTT_PORT: '1883' }),
       DEVICE_1_IP: 'mock-ez1',
       ...(!options.nicknameless && { DEVICE_1_NICKNAME: DEVICE_NICKNAME }),
       DEVICE_2_IP: '0.0.0.0',

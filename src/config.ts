@@ -9,18 +9,21 @@ interface DeviceConfig {
 
 /** Contents, not paths: the files are read at startup so a bad path fails there, not at connect. */
 export interface MqttTls {
-  /** PEM CA bundle for a broker with a private CA; absent means the system's trusted CAs. */
+  /** PEM CA bundle for a broker with a private CA, or a self-signed broker certificate itself;
+   * absent means the system's trusted CAs. */
   ca?: string;
   /** PEM client certificate and key, for brokers that require mutual TLS. Both or neither. */
   cert?: string;
   key?: string;
+  /** MQTT_TLS_SKIP_VERIFY: encrypt, but accept any certificate. Explicit opt-in only. */
+  skipVerify?: boolean;
 }
 
 interface Config {
   devices: DeviceConfig[];
   mqttHost: string;
   mqttPort: number;
-  /** Set when MQTT_TLS=true; absent means plain mqtt://, the default. */
+  /** TLS settings; absent only when MQTT_INSECURE=true asked for plain mqtt://. */
   mqttTls?: MqttTls;
   mqttUser?: string;
   mqttPassword?: string;
@@ -207,20 +210,31 @@ const TLS_FILES = [['MQTT_CA_FILE', 'ca'], ['MQTT_CERT_FILE', 'cert'], ['MQTT_KE
 export type ReadFile = (path: string) => string;
 const readUtf8: ReadFile = (path) => readFileSync(path, 'utf8');
 
-/** Undefined unless MQTT_TLS=true. Certificate verification is never switched off: a broker with a
- * private CA is what MQTT_CA_FILE is for. */
-function parseTls(env: Env, readFile: ReadFile, errors: string[]): MqttTls | undefined {
-  const enabled = boolean(env, 'MQTT_TLS', errors);
+/**
+ * TLS is the default; plain mqtt:// needs MQTT_INSECURE=true. Returns undefined only in that case.
+ * Verification is on unless MQTT_TLS_SKIP_VERIFY=true. For a self-signed broker the better route is
+ * MQTT_CA_FILE pointing at its certificate, which keeps the connection authenticated.
+ */
+function parseTls(env: Env, readFile: ReadFile, errors: string[], warnings: string[]): MqttTls | undefined {
+  const insecure = boolean(env, 'MQTT_INSECURE', errors);
+  const skipVerify = boolean(env, 'MQTT_TLS_SKIP_VERIFY', errors);
   const paths = TLS_FILES.filter(([name]) => env[name]?.trim());
-  if (!enabled) {
-    // Set but inert would mean credentials quietly going over plain TCP.
-    if (paths.length > 0) errors.push(`${paths.map(([name]) => name).join(', ')} only apply with MQTT_TLS=true.`);
+  if (insecure) {
+    // Contradictory settings: one of them is a mistake, and guessing which could mean cleartext.
+    const tlsSettings = [...paths.map(([name]) => name), ...(skipVerify ? ['MQTT_TLS_SKIP_VERIFY'] : [])];
+    if (tlsSettings.length > 0) errors.push(`MQTT_INSECURE=true turns TLS off, so ${tlsSettings.join(', ')} can't apply; unset one or the other.`);
     return undefined;
+  }
+  if (skipVerify && env.MQTT_CA_FILE?.trim()) {
+    errors.push('MQTT_TLS_SKIP_VERIFY=true ignores MQTT_CA_FILE; for a self-signed broker, set only MQTT_CA_FILE (to its certificate).');
   }
   if (!!env.MQTT_CERT_FILE?.trim() !== !!env.MQTT_KEY_FILE?.trim()) {
     errors.push('MQTT_CERT_FILE and MQTT_KEY_FILE must be set together (client certificate and its key).');
   }
-  const tls: MqttTls = {};
+  if (skipVerify) {
+    warnings.push('MQTT_TLS_SKIP_VERIFY=true: the broker\'s certificate is not verified, so the connection is encrypted but anyone in the path can impersonate the broker. Prefer MQTT_CA_FILE.');
+  }
+  const tls: MqttTls = skipVerify ? { skipVerify } : {};
   for (const [name, field] of paths) {
     const path = env[name]!.trim();
     try {
@@ -238,7 +252,7 @@ function parseTls(env: Env, readFile: ReadFile, errors: string[]): MqttTls | und
 export function parseConfig(env: Env, readFile: ReadFile = readUtf8): ParsedConfig {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const mqttTls = parseTls(env, readFile, errors);
+  const mqttTls = parseTls(env, readFile, errors, warnings);
 
   const mqttBaseTopic = env.MQTT_BASE_TOPIC?.trim() || 'ez12mqtt';
   const homeAssistantDiscoveryPrefix = env.HOMEASSISTANT_DISCOVERY_PREFIX?.trim() || 'homeassistant';
