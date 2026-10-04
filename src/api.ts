@@ -1,5 +1,3 @@
-import axios, { isAxiosError } from 'axios';
-import type { AxiosInstance } from 'axios';
 import { errorMessage, logger } from './logger.ts';
 
 interface ApiResponse<T> {
@@ -37,48 +35,65 @@ export interface AlarmInfo {
   oe: string;
 }
 
-export class EZ1API {
-  private client: AxiosInstance;
-  private ip: string;
+/** Network failures that just mean "the inverter isn't there right now" — expected every night. */
+const UNREACHABLE = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH']);
 
-  constructor(ip: string) {
+const REQUEST_TIMEOUT_MS = 5000;
+
+/** fetch wraps network failures as `TypeError: fetch failed` with the system error as its cause. */
+function networkErrorCode(error: unknown): string | undefined {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code = cause instanceof Error && 'code' in cause ? cause.code : undefined;
+  return typeof code === 'string' ? code : undefined;
+}
+
+export class EZ1API {
+  private readonly baseUrl: string;
+  private readonly ip: string;
+
+  /** The EZ1's local API always listens on 8050; the port is a parameter only so tests can stand in. */
+  constructor(ip: string, port = 8050) {
     this.ip = ip;
-    this.client = axios.create({
-      baseURL: `http://${ip}:8050`,
-      timeout: 5000, // 5 seconds timeout
-    });
+    this.baseUrl = `http://${ip}:${port}`;
   }
 
   private async get<T>(endpoint: string): Promise<T | null> {
-    const url = `${this.client.defaults.baseURL}${endpoint}`;
+    const url = `${this.baseUrl}${endpoint}`;
     const requestStartTime = Date.now();
     try {
-      const response = await this.client.get<ApiResponse<T>>(endpoint);
+      const response = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       const responseTime = Date.now() - requestStartTime;
-      logger.debug(`API Response - URL: ${url}, Time: ${responseTime}ms, Status: ${response.status}, Body: ${JSON.stringify(response.data)}`);
+      const body = await response.text();
+      if (!response.ok) {
+        logger.info(`API Error Response - URL: ${url}, Time: ${responseTime}ms, Status: ${response.status}, Body: ${body}`);
+        logger.error(`Error fetching data from ${this.ip}${endpoint}: HTTP ${response.status}`);
+        return null;
+      }
+      logger.debug(`API Response - URL: ${url}, Time: ${responseTime}ms, Status: ${response.status}, Body: ${body}`);
 
-      if (response.data.message === 'SUCCESS') {
-        return response.data.data;
+      // The device's envelope, trusted as far as its shape; the fields inside are typed per endpoint.
+      const data = JSON.parse(body) as ApiResponse<T>;
+      if (data.message === 'SUCCESS') {
+        return data.data;
       } else {
-        logger.warn(`API call to ${this.ip}${endpoint} returned non-success message: ${response.data.message}`);
+        logger.warn(`API call to ${this.ip}${endpoint} returned non-success message: ${data.message}`);
         return null;
       }
     } catch (error: unknown) {
       const responseTime = Date.now() - requestStartTime;
-      if (!isAxiosError(error)) {
-        logger.error(`Error fetching data from ${this.ip}${endpoint}: ${errorMessage(error)}`);
+      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        logger.info(`API Error Request - URL: ${url}, Time: ${responseTime}ms, No response received.`);
+        logger.error(`Error fetching data from ${this.ip}${endpoint}: timeout of ${REQUEST_TIMEOUT_MS}ms exceeded`);
         return null;
       }
-      if (error.response) {
-        logger.info(`API Error Response - URL: ${url}, Time: ${responseTime}ms, Status: ${error.response.status}, Body: ${JSON.stringify(error.response.data)}`);
-      } else if (error.request) {
+      const code = networkErrorCode(error);
+      if (code) {
         logger.info(`API Error Request - URL: ${url}, Time: ${responseTime}ms, No response received.`);
       }
-
-      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'EHOSTUNREACH') {
+      if (code && UNREACHABLE.has(code)) {
         logger.debug(`Device ${this.ip} is offline or unreachable for ${endpoint}.`);
       } else {
-        logger.error(`Error fetching data from ${this.ip}${endpoint}: ${error.message}`);
+        logger.error(`Error fetching data from ${this.ip}${endpoint}: ${code ?? errorMessage(error)}`);
       }
       return null;
     }
