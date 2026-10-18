@@ -20,13 +20,13 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "mqtt": "^5.16.0",
-    "suncalc": "^2.1.0"
+    "mqtt": "^5.16.1",
+    "suncalc": "^2.1.1"
   },
   "devDependencies": {
-    "@types/node": "^26.6.4",
-    "oxlint": "^1.86.0",
-    "testcontainers": "^12.2.0",
+    "@types/node": "^26.6.5",
+    "oxlint": "^1.88.0",
+    "testcontainers": "^12.2.1",
     "typescript": "^7.0.2"
   }
 }
